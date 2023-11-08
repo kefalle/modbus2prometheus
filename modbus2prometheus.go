@@ -14,8 +14,8 @@ const APP = "modbus2prometheus"
 const VERSION = "0.0.2"
 
 var (
-	httpListenAddr = flag.String("httpListenAddr", ":3000", "TCP address to listen for http connections.")
-	modbusTcpAddr  = flag.String("modbusTcpAddr", "tcp://192.168.1.200:8899", "TCP address to modbus device with modbus TCP.")
+	httpListenAddr = flag.String("httpListenAddr", ":9101", "TCP address to listen for http connections.")
+	modbusTcpAddr  = flag.String("modbusTcpAddr", "rtuovertcp://192.168.1.200:8899", "TCP address to modbus device with modbus TCP.")
 	config         = flag.String("config", "./config.yaml", "Modbus controller configuration")
 
 	ControllerConfig *Config

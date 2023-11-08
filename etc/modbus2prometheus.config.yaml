@@ -1,4 +1,4 @@
-device-url: "rtuovertcp://192.168.1.200:9999"
+device-url: "rtuovertcp://192.168.1.200:8899"
 device-id: 16
 speed: 19200
 timeout: 1s

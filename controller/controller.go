@@ -31,11 +31,8 @@ type Configuration struct {
 	Speed       uint          `default:"19200"`
 	Timeout     time.Duration `default:"1s"`
 	PollingTime time.Duration `default:"1s"`
-	ReadPeriod  time.Duration `default:"10ms"`
+	ReadPeriod  time.Duration `default:"20ms"`
 	ErrTimeout  time.Duration `default:"500ms"`
-	// Logger provides a custom sink for log messages.
-	// If nil, messages will be written to stdout.
-	Logger *log.Logger
 }
 
 type Controller struct {
@@ -52,12 +49,10 @@ type Controller struct {
 }
 
 func defaultFloat32Action(val interface{}, t *Tag) {
-	sVal := (val.(float32) * 10) / 10
-	lVal := t.LastValue.(float32)
-
-	if lVal != sVal {
-		log.Printf("req %d tag %s = %f", t.controller.reqCounter.Get(), t.Name, sVal)
-		t.LastValue = sVal
+	if t.LastValue != val {
+		v := val.(float32)
+		log.Printf("req %d tag %s = %f", t.controller.reqCounter.Get(), t.Name, v)
+		t.LastValue = v
 	}
 }
 
