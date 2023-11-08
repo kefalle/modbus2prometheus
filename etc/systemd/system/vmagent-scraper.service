@@ -1,0 +1,25 @@
+# /usr/local/lib/systemd/system/vmagent-scraper.service
+[Unit]
+Description=vmagent metrics transport
+After=network.target
+
+[Service]
+Type=simple
+User=root
+PermissionsStartOnly=true
+ExecStartPre=/usr/bin/install -m 755 -d /opt/vm/vmagent-scraper/ -o root -g root
+Environment=GOMAXPROCS=1
+Environment=VMAGENT_httpListenAddr=127.0.0.1:8450
+Environment=VMAGENT_remoteWrite_url=https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push
+Environment=VMAGENT_remoteWrite_tmpDataPath=/opt/vm/vmagent-scraper/tmp
+Environment=VMAGENT_remoteWrite_basicAuth_username=<user_id>
+Environment=VMAGENT_remoteWrite_basicAuth_password=<token>
+Environment=VMAGENT_RCVBUFFORCE=33554432
+Environment=VMAGENT_promscrape_config=/etc/vmagent.scrape.config.yaml
+ExecStart=/opt/vm/vmagent-prod -envflag.enable -envflag.prefix VMAGENT_
+Restart=always
+StartLimitBurst=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

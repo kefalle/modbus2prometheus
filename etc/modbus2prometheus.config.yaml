@@ -1,0 +1,46 @@
+device-url: "rtuovertcp://192.168.1.200:9999"
+device-id: 16
+speed: 19200
+timeout: 1s
+polling-time: 1s
+read-period: 10ms
+tags:
+  - name: "temp_floor"
+    address: 513
+    operation: "read_float"
+  - name: "temp_otopl"
+    address: 515
+    operation: "read_float"
+  - name: "temp_boiler"
+    address: 517
+    operation: "read_float"
+  - name: "temp_inout"
+    address: 519
+    operation: "read_float"
+  - name: "status"
+    address: 520
+    operation: "read_uint"
+  - name: "servo_floor"
+    address: 521
+    operation: "read_uint"
+  - name: "servo_otopl"
+    address: 522
+    operation: "read_uint"
+  - name: "t_otopl_ust"
+    address: 523
+    operation: "read_uint"
+  - name: "t_floor_ust"
+    address: 524
+    operation: "read_uint"
+  - name: "t_boiler_ust"
+    address: 525
+    operation: "read_uint"
+  - name: "d_otopl_ust"
+    address: 526
+    operation: "read_uint"
+  - name: "d_floor_ust"
+    address: 527
+    operation: "read_uint"
+  - name: "d_boiler_ust"
+    address: 528
+    operation: "read_uint"
