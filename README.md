@@ -1,4 +1,4 @@
-## modbus2promtheus
+## modbus2prometheus
 
 Simple prometheus exporter and controller for modbus RTU TCP protocol
 
