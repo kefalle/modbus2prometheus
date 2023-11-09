@@ -5,7 +5,6 @@ import (
 	"github.com/mcuadros/go-defaults"
 	"github.com/simonvetter/modbus"
 	"log"
-	"net"
 	"os"
 	"sync"
 	"time"
@@ -193,11 +192,13 @@ func (c *Controller) Poll() {
 				c.incErrCounter()
 				log.Printf("Req %d error get tag %s err: %s", c.reqCounter.Get(), tag.Name, err.Error())
 
-				if cause, ok := err.(interface{ Unwrap() error }); ok {
-					if _, ok := cause.(net.Error); ok {
-						needRestart = true
-					}
-				}
+				//if cause, ok := err.(interface{ Unwrap() error }); ok {
+				//	if _, ok := cause.(net.Error); ok {
+				//		needRestart = true
+				//	}
+				//}
+				needRestart = true
+				c.modbusClient.Close()
 				c.Unlock()
 				time.Sleep(c.conf.ErrTimeout) // Добавляем задержку, чтобы сломанный пакет протух
 				break
