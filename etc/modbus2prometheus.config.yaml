@@ -28,19 +28,19 @@ tags:
     operation: "read_uint"
   - name: "t_otopl_ust"
     address: 523
-    operation: "read_uint"
+    operation: "read_uint|write_uint"
   - name: "t_floor_ust"
     address: 524
-    operation: "read_uint"
+    operation: "read_uint|write_uint"
   - name: "t_boiler_ust"
     address: 525
-    operation: "read_uint"
+    operation: "read_uint|write_uint"
   - name: "d_otopl_ust"
     address: 526
-    operation: "read_uint"
+    operation: "read_uint|write_uint"
   - name: "d_floor_ust"
     address: 527
-    operation: "read_uint"
+    operation: "read_uint|write_uint"
   - name: "d_boiler_ust"
     address: 528
-    operation: "read_uint"
+    operation: "read_uint|write_uint"

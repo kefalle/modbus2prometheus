@@ -6,6 +6,7 @@ import (
 	"github.com/simonvetter/modbus"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -13,10 +14,10 @@ import (
 type OperationType uint
 
 const (
-	READ_UINT  = iota
-	READ_FLOAT = iota
-	//WRITE_UINT = iota
-	//WRITE_UINT = iota
+	READ_UINT   = 0x1
+	READ_FLOAT  = 0x2
+	WRITE_UINT  = 0x4
+	WRITE_FLOAT = 0x8
 )
 
 type logger struct {
@@ -32,6 +33,7 @@ type Configuration struct {
 	PollingTime time.Duration `default:"1s"`
 	ReadPeriod  time.Duration `default:"20ms"`
 	ErrTimeout  time.Duration `default:"500ms"`
+	MaxAttempts uint          `default:"20"`
 }
 
 type Controller struct {
@@ -63,11 +65,24 @@ func defaultUint16Action(val interface{}, t *Tag) {
 	}
 }
 
-func ParseOperation(op string) (t OperationType) {
-	if op == "read_uint" {
-		return READ_UINT
-	} else if op == "read_float" {
-		return READ_FLOAT
+func ParseOperation(op string) (t uint8) {
+	var res uint8 = 0
+
+	if strings.Contains(op, "read_uint") {
+		res |= READ_UINT
+	}
+	if strings.Contains(op, "read_float") {
+		res |= READ_FLOAT
+	}
+	if strings.Contains(op, "write_uint") {
+		res |= WRITE_UINT
+	}
+	if strings.Contains(op, "write_float") {
+		res |= WRITE_FLOAT
+	}
+
+	if res > 0 {
+		return res
 	}
 
 	log.Println("Unsupported operation " + op + " must be read_uint, read_float")
@@ -115,10 +130,9 @@ func (c *Controller) AddTag(tag *Tag) {
 		c.RLock()
 		defer c.RUnlock()
 		if tag.LastValue != nil {
-			switch tag.Method {
-			case READ_UINT:
+			if (tag.Method & READ_UINT) == READ_UINT {
 				return float64(tag.LastValue.(uint16))
-			case READ_FLOAT:
+			} else if (tag.Method & READ_FLOAT) == READ_FLOAT {
 				return float64(tag.LastValue.(float32))
 			}
 		}
@@ -126,10 +140,9 @@ func (c *Controller) AddTag(tag *Tag) {
 	})
 
 	if tag.Action == nil {
-		switch tag.Method {
-		case READ_UINT:
+		if (tag.Method & READ_UINT) == READ_UINT {
 			tag.Action = defaultUint16Action
-		case READ_FLOAT:
+		} else if (tag.Method & READ_FLOAT) == READ_FLOAT {
 			tag.Action = defaultFloat32Action
 		}
 	}
@@ -154,12 +167,15 @@ func (c *Controller) incErrCounter() {
 func (c *Controller) Poll() {
 	log.Println("Start polling...")
 
+	var failAttempts uint = 0
 	c.exit = false
 	needRestart := false
 	for {
-		if c.exit {
+		// Дали команду на выход или количество ошибок превысило ограничение чтобы выйти
+		if c.exit || failAttempts >= c.conf.MaxAttempts {
 			break
 		}
+
 		for i, tag := range c.tags {
 			// Принудительный рестарт
 			if needRestart {
@@ -170,6 +186,7 @@ func (c *Controller) Poll() {
 					break
 				}
 				needRestart = false
+				failAttempts += 1
 			}
 
 			time.Sleep(c.conf.ReadPeriod)
@@ -178,13 +195,14 @@ func (c *Controller) Poll() {
 			var err error
 			var val interface{}
 
-			switch tag.Method {
-			case READ_UINT:
-				val, err = c.modbusClient.ReadRegister(tag.Address, modbus.HOLDING_REGISTER)
-				c.incCounter()
-			case READ_FLOAT:
-				val, err = c.modbusClient.ReadFloat32(tag.Address, modbus.HOLDING_REGISTER)
-				c.incCounter()
+			if tag.Action != nil {
+				if (tag.Method & READ_UINT) == READ_UINT {
+					val, err = c.modbusClient.ReadRegister(tag.Address, modbus.HOLDING_REGISTER)
+					c.incCounter()
+				} else if (tag.Method & READ_FLOAT) == READ_FLOAT {
+					val, err = c.modbusClient.ReadFloat32(tag.Address, modbus.HOLDING_REGISTER)
+					c.incCounter()
+				}
 			}
 
 			// Обработка ошибок
@@ -204,6 +222,7 @@ func (c *Controller) Poll() {
 				break
 			}
 			tag.Action(val, c.tags[i])
+			failAttempts = 0 // Сбрасываем счетчик попыток
 			c.Unlock()
 		}
 		time.Sleep(c.conf.PollingTime)
@@ -214,4 +233,6 @@ func (c *Controller) Poll() {
 	if err != nil {
 		log.Println("Controller close error: " + err.Error())
 	}
+
+	os.Exit(2)
 }

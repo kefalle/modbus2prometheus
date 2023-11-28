@@ -7,7 +7,7 @@ type Tag struct {
 	DisplayName string
 	Address     uint16
 	Action      func(interface{}, *Tag)
-	Method      OperationType
+	Method      uint8
 	LastValue   interface{}
 	Gauge       *metrics.Gauge
 	controller  *Controller

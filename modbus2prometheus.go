@@ -17,6 +17,7 @@ var (
 	httpListenAddr = flag.String("httpListenAddr", ":9101", "TCP address to listen for http connections.")
 	modbusTcpAddr  = flag.String("modbusTcpAddr", "rtuovertcp://192.168.1.200:8899", "TCP address to modbus device with modbus TCP.")
 	config         = flag.String("config", "./config.yaml", "Modbus controller configuration")
+	maxAttempts    = flag.Uint("maxAttempts", 20, "Max attempts before fail exit")
 
 	ControllerConfig *Config
 )
@@ -31,6 +32,7 @@ func initController() (ctrl *controller.Controller, err error) {
 		Timeout:     ControllerConfig.Timeout,
 		PollingTime: ControllerConfig.PollingTime,
 		ReadPeriod:  ControllerConfig.ReadPeriod,
+		MaxAttempts: *maxAttempts,
 	})
 	if err != nil {
 		log.Println(err.Error())
@@ -47,7 +49,8 @@ func initController() (ctrl *controller.Controller, err error) {
 // Инициализация сервера http для выдачи состояния и метрик
 func initHttpServer(ctrl *controller.Controller) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("/tags", TagsHahdler(ctrl))
+	mux.Handle("/tags", controller.TagsHahdler(ctrl))
+	mux.Handle("/api/v1/write", ctrl.WriteTagsHandler())
 	mux.Handle("/metrics", MetricsHandler())
 
 	return mux
