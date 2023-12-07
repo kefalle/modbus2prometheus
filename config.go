@@ -12,23 +12,30 @@ type TagConfig struct {
 	Desc      string `yaml:"desc"`
 	Address   uint16 `yaml:"address"`
 	Operation string `yaml:"operation"`
+	Group     string `yaml:"group"`
+}
+
+type TelegramConfig struct {
+	ApiToken string           `yaml:"apiToken"`
+	Owners   map[int64]string `yaml:"owners"`
 }
 
 type Config struct {
-	DeviceUrl   string        `yaml:"device-url"`
-	DeviceId    uint8         `yaml:"device-id" default:"16"`
-	Speed       uint          `yaml:"speed" default:"19200"`
-	Timeout     time.Duration `yaml:"timeout" default:"1s"`
-	PollingTime time.Duration `yaml:"polling-time" default:"1s"`
-	ReadPeriod  time.Duration `yaml:"read-period" default:"10ms"`
-	Tags        []TagConfig   `yaml:"tags"`
+	DeviceUrl   string         `yaml:"device-url"`
+	DeviceId    uint8          `yaml:"device-id" default:"16"`
+	Speed       uint           `yaml:"speed" default:"19200"`
+	Timeout     time.Duration  `yaml:"timeout" default:"1s"`
+	PollingTime time.Duration  `yaml:"polling-time" default:"1s"`
+	ReadPeriod  time.Duration  `yaml:"read-period" default:"10ms"`
+	Tags        []TagConfig    `yaml:"tags"`
+	Telegram    TelegramConfig `yaml:"telegram"`
 }
 
 func NewConfig(configPath string) (config *Config, err error) {
-	// Create config structure
+	// Create configPath structure
 	config = &Config{}
 
-	// Open config file
+	// Open configPath file
 	file, err := os.Open(configPath)
 	if err != nil {
 		return nil, err

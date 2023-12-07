@@ -6,7 +6,6 @@ import (
 	"github.com/simonvetter/modbus"
 	"log"
 	"os"
-	"strings"
 	"sync"
 	"time"
 )
@@ -49,48 +48,6 @@ type Controller struct {
 	reqCounter *metrics.Counter
 }
 
-func defaultFloat32Action(val interface{}, t *Tag) {
-	if t.LastValue != val {
-		v := val.(float32)
-		log.Printf("req %d tag %s = %f", t.controller.reqCounter.Get(), t.Name, v)
-		t.LastValue = v
-	}
-}
-
-func defaultUint16Action(val interface{}, t *Tag) {
-	if t.LastValue != val {
-		v := val.(uint16)
-		log.Printf("req %d tag %s = %d", t.controller.reqCounter.Get(), t.Name, v)
-		t.LastValue = val
-	}
-}
-
-func ParseOperation(op string) (t uint8) {
-	var res uint8 = 0
-
-	if strings.Contains(op, "read_uint") {
-		res |= READ_UINT
-	}
-	if strings.Contains(op, "read_float") {
-		res |= READ_FLOAT
-	}
-	if strings.Contains(op, "write_uint") {
-		res |= WRITE_UINT
-	}
-	if strings.Contains(op, "write_float") {
-		res |= WRITE_FLOAT
-	}
-
-	if res > 0 {
-		return res
-	}
-
-	log.Println("Unsupported operation " + op + " must be read_uint, read_float")
-	os.Exit(1)
-
-	return 0
-}
-
 func New(conf *Configuration) (c *Controller, err error) {
 	defaults.SetDefaults(conf)
 	c = &Controller{
@@ -122,6 +79,20 @@ func New(conf *Configuration) (c *Controller, err error) {
 	return
 }
 
+func (c *Controller) FindTag(name string) *Tag {
+	for i, tag := range c.tags {
+		if tag.Name == name {
+			return c.tags[i]
+		}
+	}
+
+	return nil
+}
+
+func (c *Controller) Tags() []*Tag {
+	return c.tags
+}
+
 func (c *Controller) AddTag(tag *Tag) {
 	c.Lock()
 	defer c.Unlock()
@@ -130,9 +101,9 @@ func (c *Controller) AddTag(tag *Tag) {
 		c.RLock()
 		defer c.RUnlock()
 		if tag.LastValue != nil {
-			if (tag.Method & READ_UINT) == READ_UINT {
+			if isUint(tag) {
 				return float64(tag.LastValue.(uint16))
-			} else if (tag.Method & READ_FLOAT) == READ_FLOAT {
+			} else if isFloat(tag) {
 				return float64(tag.LastValue.(float32))
 			}
 		}
@@ -140,16 +111,27 @@ func (c *Controller) AddTag(tag *Tag) {
 	})
 
 	if tag.Action == nil {
-		if (tag.Method & READ_UINT) == READ_UINT {
+		if isUint(tag) {
 			tag.Action = defaultUint16Action
-		} else if (tag.Method & READ_FLOAT) == READ_FLOAT {
+		} else if isFloat(tag) {
 			tag.Action = defaultFloat32Action
+
 		}
 	}
-
 	tag.controller = c
 
 	c.tags = append(c.tags, tag)
+}
+
+func (c *Controller) WriteTag(tag *Tag, value float64) (err error) {
+	// Пробуем записать
+	if isWriteUint(tag) {
+		err = c.modbusClient.WriteRegister(tag.Address, uint16(value))
+	} else if isWriteFloat(tag) {
+		err = c.modbusClient.WriteFloat32(tag.Address, float32(value))
+	}
+
+	return
 }
 
 func (c *Controller) Close() {
@@ -196,10 +178,10 @@ func (c *Controller) Poll() {
 			var val interface{}
 
 			if tag.Action != nil {
-				if (tag.Method & READ_UINT) == READ_UINT {
+				if isUint(tag) {
 					val, err = c.modbusClient.ReadRegister(tag.Address, modbus.HOLDING_REGISTER)
 					c.incCounter()
-				} else if (tag.Method & READ_FLOAT) == READ_FLOAT {
+				} else if isFloat(tag) {
 					val, err = c.modbusClient.ReadFloat32(tag.Address, modbus.HOLDING_REGISTER)
 					c.incCounter()
 				}

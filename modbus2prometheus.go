@@ -6,6 +6,7 @@ import (
 	"github.com/mcuadros/go-defaults"
 	"log"
 	"modbus2prometheus/controller"
+	"modbus2prometheus/telegram"
 	"net/http"
 	"os"
 )
@@ -16,22 +17,22 @@ const VERSION = "0.0.2"
 var (
 	httpListenAddr = flag.String("httpListenAddr", ":9101", "TCP address to listen for http connections.")
 	modbusTcpAddr  = flag.String("modbusTcpAddr", "rtuovertcp://192.168.1.200:8899", "TCP address to modbus device with modbus TCP.")
-	config         = flag.String("config", "./config.yaml", "Modbus controller configuration")
+	configPath     = flag.String("config", "./config.yaml", "Modbus controller configuration")
 	maxAttempts    = flag.Uint("maxAttempts", 20, "Max attempts before fail exit")
 
-	ControllerConfig *Config
+	config *Config
 )
 
 // Инициализация модбас контроллера
 func initController() (ctrl *controller.Controller, err error) {
 	log.Println("Configuring modbus controller " + *modbusTcpAddr)
 	ctrl, err = controller.New(&controller.Configuration{
-		Url:         ControllerConfig.DeviceUrl,
-		DeviceId:    ControllerConfig.DeviceId,
-		Speed:       ControllerConfig.Speed,
-		Timeout:     ControllerConfig.Timeout,
-		PollingTime: ControllerConfig.PollingTime,
-		ReadPeriod:  ControllerConfig.ReadPeriod,
+		Url:         config.DeviceUrl,
+		DeviceId:    config.DeviceId,
+		Speed:       config.Speed,
+		Timeout:     config.Timeout,
+		PollingTime: config.PollingTime,
+		ReadPeriod:  config.ReadPeriod,
 		MaxAttempts: *maxAttempts,
 	})
 	if err != nil {
@@ -39,8 +40,13 @@ func initController() (ctrl *controller.Controller, err error) {
 		os.Exit(1)
 	}
 
-	for _, tag := range ControllerConfig.Tags {
-		ctrl.AddTag(&controller.Tag{Name: tag.Name, DisplayName: tag.Desc, Address: tag.Address, Method: controller.ParseOperation(tag.Operation)})
+	for _, tag := range config.Tags {
+		ctrl.AddTag(&controller.Tag{
+			Name:        tag.Name,
+			DisplayName: tag.Desc,
+			Group:       tag.Group,
+			Address:     tag.Address,
+			Method:      controller.ParseOperation(tag.Operation)})
 	}
 
 	return
@@ -56,6 +62,47 @@ func initHttpServer(ctrl *controller.Controller) *http.ServeMux {
 	return mux
 }
 
+// initTelegram инициализация телеграм бота из конфига
+func initTelegram(ctrl *controller.Controller) {
+
+	listFn := func(group string) func() string {
+		return func() string {
+			var repl string
+			for _, tag := range ctrl.Tags() {
+				if group == tag.Group || group == "" {
+					if tag.DisplayName != "" {
+						repl += tag.DisplayName + ": " + controller.ValToStr(tag) + "\n"
+					} else {
+						repl += tag.Name + ": " + controller.ValToStr(tag) + "\n"
+					}
+				}
+			}
+			return repl
+		}
+	}
+
+	apiCommands := []telegram.ICommand{
+		telegram.NewSimpleCommand(&telegram.SimpleCommandConf{
+			CommandStr:     "state_all",
+			DescriptionStr: "Отобразить все параметры",
+			ReplyFunc:      listFn(""),
+		}),
+		telegram.NewSimpleCommand(&telegram.SimpleCommandConf{
+			CommandStr:     "state",
+			DescriptionStr: "Отобразить только измерения",
+			ReplyFunc:      listFn("state"),
+		}),
+		telegram.NewSimpleCommand(&telegram.SimpleCommandConf{
+			CommandStr:     "ust",
+			DescriptionStr: "Отобразить только уставки",
+			ReplyFunc:      listFn("ust"),
+		}),
+		telegram.NewUstCommand(ctrl),
+	}
+
+	telegram.New(telegram.BotConfig{config.Telegram.ApiToken, config.Telegram.Owners, apiCommands, ctrl})
+}
+
 func ParseFlags() {
 	flag.CommandLine.SetOutput(os.Stdout)
 	flag.Usage = func() {
@@ -67,21 +114,21 @@ Usage: %s [options]
 	}
 	flag.Parse()
 
-	err := ValidateConfigPath(*config)
+	err := ValidateConfigPath(*configPath)
 	if err != nil {
-		log.Println("Cannot find config: " + err.Error())
+		log.Println("Cannot find configPath: " + err.Error())
 		os.Exit(1)
 	}
 
-	ControllerConfig, err = NewConfig(*config)
+	config, err = NewConfig(*configPath)
 	if err != nil {
-		log.Println("Cannot parse config" + err.Error())
+		log.Println("Cannot parse configPath" + err.Error())
 		os.Exit(1)
 	}
 
-	defaults.SetDefaults(ControllerConfig)
-	if len(ControllerConfig.DeviceUrl) == 0 {
-		ControllerConfig.DeviceUrl = *modbusTcpAddr
+	defaults.SetDefaults(config)
+	if len(config.DeviceUrl) == 0 {
+		config.DeviceUrl = *modbusTcpAddr
 	}
 }
 
@@ -99,6 +146,9 @@ func main() {
 	// Запуск полера
 	go ctrl.Poll()
 	defer ctrl.Close()
+
+	// Запуск телеграм бота, управления домом
+	initTelegram(ctrl)
 
 	// Инициализация сервера
 	mux := initHttpServer(ctrl)

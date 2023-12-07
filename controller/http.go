@@ -8,7 +8,7 @@ import (
 
 type WriteTag struct {
 	Name  string  `json:"name"`
-	Value float32 `json:"value"`
+	Value float64 `json:"value"`
 }
 
 func TagsHahdler(c *Controller) http.HandlerFunc {
@@ -27,16 +27,6 @@ func TagsHahdler(c *Controller) http.HandlerFunc {
 	}
 
 	return fn
-}
-
-func (c *Controller) FindTag(name string) *Tag {
-	for i, tag := range c.tags {
-		if tag.Name == name {
-			return c.tags[i]
-		}
-	}
-
-	return nil
 }
 
 func (c *Controller) WriteTagsHandler() http.HandlerFunc {
@@ -65,24 +55,19 @@ func (c *Controller) WriteTagsHandler() http.HandlerFunc {
 			}
 
 			// Пробуем записать
-			if (tag.Method & WRITE_UINT) == WRITE_UINT {
-				err := c.modbusClient.WriteRegister(tag.Address, uint16(writeTag.Value))
-				if err != nil {
-					log.Printf("Write tag %s error: %s", tag.Name, err.Error())
-					w.WriteHeader(http.StatusBadRequest)
-					w.Write([]byte("Bad Request: write modbus error"))
-				}
-			} else if (tag.Method & WRITE_FLOAT) == WRITE_FLOAT {
-				err := c.modbusClient.WriteFloat32(tag.Address, float32(writeTag.Value))
-				if err != nil {
-					log.Printf("Write tag %s error: %s", tag.Name, err.Error())
-					w.WriteHeader(http.StatusBadRequest)
-					w.Write([]byte("Bad Request: write modbus error"))
-				}
-			} else {
+			if !Writable(tag) {
 				w.WriteHeader(http.StatusBadRequest)
 				w.Write([]byte("Bad Request: operation not permitted"))
 				log.Printf("Request tag name %s has not permission, see config", writeTag.Name)
+				return
+			}
+
+			err = c.WriteTag(tag, writeTag.Value)
+			if err != nil {
+				log.Printf("Write tag %s error: %s", tag.Name, err.Error())
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte("Bad Request: write modbus error"))
+				return
 			}
 
 			w.WriteHeader(http.StatusOK)

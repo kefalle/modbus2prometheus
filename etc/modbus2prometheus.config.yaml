@@ -8,39 +8,82 @@ tags:
   - name: "temp_floor"
     address: 513
     operation: "read_float"
+    desc: "Т пола"
+    group: "state"
+
   - name: "temp_otopl"
     address: 515
     operation: "read_float"
+    desc: "Т отопления"
+    group: "state"
+
   - name: "temp_boiler"
     address: 517
     operation: "read_float"
+    desc: "Т бойлера"
+    group: "state"
+
   - name: "temp_inout"
     address: 519
     operation: "read_float"
+    desc: "Т внеш"
+    group: "state"
+
   - name: "status"
     address: 520
     operation: "read_uint"
+    desc: "Состояние"
+    group: "state"
+
   - name: "servo_floor"
     address: 521
     operation: "read_uint"
+    desc: "Серв. пола"
+    group: "state"
+
   - name: "servo_otopl"
     address: 522
     operation: "read_uint"
+    desc: "Серв. отопления"
+    group: "state"
+
   - name: "t_otopl_ust"
     address: 523
     operation: "read_uint|write_uint"
+    desc: "Туст отопления"
+    group: "ust"
+
   - name: "t_floor_ust"
     address: 524
     operation: "read_uint|write_uint"
+    desc: "Туст пола"
+    group: "ust"
+
   - name: "t_boiler_ust"
     address: 525
     operation: "read_uint|write_uint"
+    desc: "Туст бойлера"
+    group: "ust"
+
   - name: "d_otopl_ust"
     address: 526
     operation: "read_uint|write_uint"
+    desc: "Дельта отопления"
+    group: "ust"
+
   - name: "d_floor_ust"
     address: 527
     operation: "read_uint|write_uint"
+    desc: "Дельта пола"
+    group: "ust"
+
   - name: "d_boiler_ust"
     address: 528
     operation: "read_uint|write_uint"
+    desc: "Дельта бойлера"
+    group: "ust"
+
+telegram:
+  apiToken: "<TOKEN>"
+  owners:
+    11111111: "Artem"
