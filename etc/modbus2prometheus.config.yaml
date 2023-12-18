@@ -84,6 +84,6 @@ tags:
     group: "ust"
 
 telegram:
-  apiToken: "<TOKEN>"
   owners:
-    11111111: "Artem"
+    813834143: "Artem"
+  nodeRedUrl: "http://192.168.1.204:1880"

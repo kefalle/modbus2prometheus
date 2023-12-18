@@ -7,6 +7,7 @@ import (
 	"log"
 	"modbus2prometheus/controller"
 	"modbus2prometheus/telegram"
+	"modbus2prometheus/telegram/commands"
 	"net/http"
 	"os"
 )
@@ -18,7 +19,8 @@ var (
 	httpListenAddr = flag.String("httpListenAddr", ":9101", "TCP address to listen for http connections.")
 	modbusTcpAddr  = flag.String("modbusTcpAddr", "rtuovertcp://192.168.1.200:8899", "TCP address to modbus device with modbus TCP.")
 	configPath     = flag.String("config", "./config.yaml", "Modbus controller configuration")
-	maxAttempts    = flag.Uint("maxAttempts", 20, "Max attempts before fail exit")
+	maxAttempts    = flag.Uint("maxAttempts", 100, "Max attempts before fail exit")
+	botApiToken    = flag.String("botApiToken", "", "Telegram bot API token")
 
 	config *Config
 )
@@ -48,6 +50,10 @@ func initController() (ctrl *controller.Controller, err error) {
 			Address:     tag.Address,
 			Method:      controller.ParseOperation(tag.Operation)})
 	}
+
+	// Запуск полера
+	go ctrl.Poll()
+	defer ctrl.Close()
 
 	return
 }
@@ -97,7 +103,8 @@ func initTelegram(ctrl *controller.Controller) {
 			DescriptionStr: "Отобразить только уставки",
 			ReplyFunc:      listFn("ust"),
 		}),
-		telegram.NewUstCommand(ctrl),
+		commands.NewUstCommand(ctrl),
+		commands.NewSensorsCommand(config.Telegram.NodeRedUrl + "/current_th"),
 	}
 
 	telegram.New(telegram.BotConfig{config.Telegram.ApiToken, config.Telegram.Owners, apiCommands, ctrl})
@@ -130,6 +137,10 @@ Usage: %s [options]
 	if len(config.DeviceUrl) == 0 {
 		config.DeviceUrl = *modbusTcpAddr
 	}
+
+	if *botApiToken != "" {
+		config.Telegram.ApiToken = *botApiToken
+	}
 }
 
 func main() {
@@ -142,10 +153,6 @@ func main() {
 		log.Println("Can not init modbus device: " + err.Error())
 		os.Exit(1)
 	}
-
-	// Запуск полера
-	go ctrl.Poll()
-	defer ctrl.Close()
 
 	// Запуск телеграм бота, управления домом
 	initTelegram(ctrl)

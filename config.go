@@ -16,8 +16,9 @@ type TagConfig struct {
 }
 
 type TelegramConfig struct {
-	ApiToken string           `yaml:"apiToken"`
-	Owners   map[int64]string `yaml:"owners"`
+	ApiToken   string           `yaml:"apiToken"`
+	Owners     map[int64]string `yaml:"owners"`
+	NodeRedUrl string           `yaml:"nodeRedUrl"`
 }
 
 type Config struct {
