@@ -100,13 +100,15 @@ func (u *UstCommand) Callback(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool
 		panic(err)
 	}
 
-	text := "Введите значение"
 	tagName := update.CallbackQuery.Data
+	text := "Введите значени:"
 	u.currentTag = u.ctrl.FindTag(tagName)
 	if u.currentTag == nil {
 		text = "Выбран не корректный тег " + tagName
 	} else if !controller.Writable(u.currentTag) {
 		text = "Тег " + tagName + " не может быть записан, см. конфигурацию"
+	} else {
+		text = "Введите значени для " + u.currentTag.DisplayName + ":"
 	}
 
 	// And finally, send a message containing the data received.
