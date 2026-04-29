@@ -5,7 +5,7 @@ services:
       dockerfile: docker/Dockerfile
     container_name: modbus2prometheus
     volumes:
-      - ../config.yaml:/app/config.yaml:ro
+      - /etc/modbus2prometheus.config.yaml:/app/config.yaml:ro
     command: ["./modbus2prometheus", "-config", "/app/config.yaml"]
     restart: unless-stopped
     networks:
