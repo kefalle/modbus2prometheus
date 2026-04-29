@@ -1,0 +1,4 @@
+build
+*.md
+.git
+.gitignore
