@@ -8,8 +8,7 @@ services:
       - /etc/modbus2prometheus.config.yaml:/app/config.yaml:ro
     command: ["./modbus2prometheus", "-config", "/app/config.yaml"]
     restart: unless-stopped
-    networks:
-      - proxy
+    network_mode: host
 
   # grafana:
   #   image: grafana/grafana:latest
@@ -25,15 +24,10 @@ services:
       context: .
       dockerfile: Dockerfile.nginx
     container_name: proxy
-    ports:
-      - "80:80"
+    network_mode: host
     depends_on:
       - modbus2prometheus
     restart: unless-stopped
-    extra_hosts:
-      - host.docker.internal:host-gateway
-    networks:
-      - proxy
 
 networks:
   proxy:
