@@ -24,7 +24,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.19.8'
+          go-version: '1.25.x'
   
       - name: Build for arm
         run: GOOS="linux" GOARCH="arm" go build

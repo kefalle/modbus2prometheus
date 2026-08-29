@@ -107,7 +107,12 @@ func initTelegram(ctrl *controller.Controller) {
 		commands.NewSensorsCommand(config.Telegram.NodeRedUrl + "/current_th"),
 	}
 
-	telegram.New(telegram.BotConfig{config.Telegram.ApiToken, config.Telegram.Owners, apiCommands, ctrl})
+	telegram.New(telegram.BotConfig{
+		BotToken: config.Telegram.ApiToken,
+		Owners:   config.Telegram.Owners,
+		Api:      apiCommands,
+		Ctrl:     ctrl,
+	})
 }
 
 func ParseFlags() {
