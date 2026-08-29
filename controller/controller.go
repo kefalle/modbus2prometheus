@@ -39,7 +39,8 @@ type Controller struct {
 	sync.RWMutex
 	conf         Configuration
 	logger       *logger
-	modbusClient *modbus.ModbusClient
+	modbusClient registerClient
+	metricsSet   *metrics.Set
 	tags         []*Tag
 	exit         bool
 
@@ -50,33 +51,25 @@ type Controller struct {
 
 func New(conf *Configuration) (c *Controller, err error) {
 	defaults.SetDefaults(conf)
-	c = &Controller{
-		conf: *conf,
-	}
-
-	// Создаем метрики
-	c.reqCounter = metrics.NewCounter("req_counter")
-	c.errCounter = metrics.NewCounter("err_counter")
-
-	// for an RTU over TCP device/bus (remote serial port or
-	// simple TCP-to-serial bridge)
-	c.modbusClient, err = modbus.NewClient(&modbus.ClientConfiguration{
-		URL:     c.conf.Url,
-		Speed:   c.conf.Speed, // serial link speed
-		Timeout: c.conf.Timeout,
-	})
+	client, err := newRegisterClient(*conf)
 	if err != nil {
-		return
+		return nil, err
 	}
 
-	err = c.modbusClient.SetUnitId(c.conf.DeviceId)
-	if err != nil {
-		return
+	set := metrics.NewSet()
+	metrics.RegisterSet(set)
+
+	return newWithClient(*conf, client, set), nil
+}
+
+func newWithClient(conf Configuration, client registerClient, set *metrics.Set) *Controller {
+	return &Controller{
+		conf:         conf,
+		modbusClient: client,
+		metricsSet:   set,
+		reqCounter:   set.NewCounter("req_counter"),
+		errCounter:   set.NewCounter("err_counter"),
 	}
-
-	err = c.modbusClient.Open()
-
-	return
 }
 
 func (c *Controller) FindTag(name string) *Tag {
@@ -97,7 +90,7 @@ func (c *Controller) AddTag(tag *Tag) {
 	c.Lock()
 	defer c.Unlock()
 
-	tag.Gauge = metrics.NewGauge(tag.Name, func() float64 {
+	tag.Gauge = c.metricsSet.NewGauge(tag.Name, func() float64 {
 		c.RLock()
 		defer c.RUnlock()
 		if tag.LastValue != nil {
