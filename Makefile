@@ -1,4 +1,4 @@
-.PHONY: build test lint tidy clean
+.PHONY: build test lint tidy clean update
 
 build:
 	GOPATH= GOMODCACHE= GOCACHE= mkdir -p build && go build -o build/modbus2prometheus .
@@ -14,3 +14,8 @@ tidy:
 
 clean:
 	rm -rf build
+
+update:
+	git pull --ff-only
+	docker compose -f docker/docker-compose.yml build --pull
+	docker compose -f docker/docker-compose.yml up -d --force-recreate
