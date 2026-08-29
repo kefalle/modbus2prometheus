@@ -74,7 +74,7 @@ func initTelegram(ctrl *controller.Controller) {
 	listFn := func(group string) func() string {
 		return func() string {
 			var repl string
-			for _, tag := range ctrl.Tags() {
+			for _, tag := range ctrl.Snapshot() {
 				if group == tag.Group || group == "" {
 					if tag.DisplayName != "" {
 						repl += tag.DisplayName + ": " + controller.ValToStr(tag) + "\n"

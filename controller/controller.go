@@ -44,7 +44,6 @@ type Controller struct {
 	modbusClient registerClient
 	metricsSet   *metrics.Set
 	tags         []*Tag
-	exit         bool
 
 	// metrics
 	errCounter *metrics.Counter
@@ -75,6 +74,9 @@ func newWithClient(conf Configuration, client registerClient, set *metrics.Set) 
 }
 
 func (c *Controller) FindTag(name string) *Tag {
+	c.RLock()
+	defer c.RUnlock()
+
 	for i, tag := range c.tags {
 		if tag.Name == name {
 			return c.tags[i]
@@ -84,8 +86,23 @@ func (c *Controller) FindTag(name string) *Tag {
 	return nil
 }
 
-func (c *Controller) Tags() []*Tag {
-	return c.tags
+func (c *Controller) Snapshot() []TagSnapshot {
+	c.RLock()
+	defer c.RUnlock()
+
+	snapshot := make([]TagSnapshot, len(c.tags))
+	for i, tag := range c.tags {
+		snapshot[i] = TagSnapshot{
+			Name:        tag.Name,
+			DisplayName: tag.DisplayName,
+			Group:       tag.Group,
+			Address:     tag.Address,
+			Value:       tag.LastValue,
+			Writable:    Writable(tag),
+		}
+	}
+
+	return snapshot
 }
 
 func (c *Controller) AddTag(tag *Tag) {
@@ -127,6 +144,18 @@ func (c *Controller) WriteTag(tag *Tag, value float64) (err error) {
 	}
 
 	return
+}
+
+func (c *Controller) WriteTagByName(name string, value float64) error {
+	tag := c.FindTag(name)
+	if tag == nil {
+		return fmt.Errorf("tag %q not found", name)
+	}
+	if !Writable(tag) {
+		return fmt.Errorf("tag %q is not writable", name)
+	}
+
+	return c.WriteTag(tag, value)
 }
 
 func (c *Controller) Close() error {

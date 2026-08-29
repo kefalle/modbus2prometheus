@@ -18,19 +18,16 @@ type JsonResponse struct {
 }
 
 func (c *Controller) Json() (data []byte, err error) {
-	c.RLock()
-	defer c.RUnlock()
-
 	var response = JsonResponse{
 		ReqCount: c.reqCounter.Get(),
 		ErrCount: c.errCounter.Get(),
 	}
 
-	for _, tag := range c.tags {
+	for _, tag := range c.Snapshot() {
 		t := JsonTag{
 			Name:    tag.Name,
 			Address: tag.Address,
-			Value:   tag.LastValue,
+			Value:   tag.Value,
 		}
 		response.Tags = append(response.Tags, t)
 	}
