@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"github.com/VictoriaMetrics/metrics"
 	"github.com/mcuadros/go-defaults"
 	"github.com/simonvetter/modbus"
 	"log"
-	"os"
 	"sync"
 	"time"
 )
@@ -127,8 +129,8 @@ func (c *Controller) WriteTag(tag *Tag, value float64) (err error) {
 	return
 }
 
-func (c *Controller) Close() {
-	c.exit = true
+func (c *Controller) Close() error {
+	return c.modbusClient.Close()
 }
 
 func (c *Controller) incCounter() {
@@ -139,16 +141,32 @@ func (c *Controller) incErrCounter() {
 	c.errCounter.Inc()
 }
 
-func (c *Controller) Poll() {
+func wait(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (c *Controller) Run(ctx context.Context) (runErr error) {
 	log.Println("Start polling...")
+	defer func() {
+		if err := c.Close(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("close Modbus client: %w", err))
+		}
+	}()
 
 	var failAttempts uint = 0
-	c.exit = false
 	needRestart := false
+polling:
 	for {
-		// Дали команду на выход или количество ошибок превысило ограничение чтобы выйти
-		if c.exit || failAttempts >= c.conf.MaxAttempts {
-			break
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 
 		for i, tag := range c.tags {
@@ -158,13 +176,21 @@ func (c *Controller) Poll() {
 				err := c.modbusClient.Open()
 				if err != nil {
 					log.Println("Can not open connect")
-					break
+					failAttempts++
+					if failAttempts >= c.conf.MaxAttempts {
+						return fmt.Errorf("reconnect failed after %d attempts: %w", failAttempts, err)
+					}
+					if err := wait(ctx, c.conf.ErrTimeout); err != nil {
+						return err
+					}
+					continue polling
 				}
 				needRestart = false
-				failAttempts += 1
 			}
 
-			time.Sleep(c.conf.ReadPeriod)
+			if err := wait(ctx, c.conf.ReadPeriod); err != nil {
+				return err
+			}
 
 			c.Lock()
 			var err error
@@ -191,23 +217,27 @@ func (c *Controller) Poll() {
 				//	}
 				//}
 				needRestart = true
-				c.modbusClient.Close()
+				if closeErr := c.modbusClient.Close(); closeErr != nil {
+					log.Printf("Controller close error: %s", closeErr.Error())
+				}
 				c.Unlock()
-				time.Sleep(c.conf.ErrTimeout) // Добавляем задержку, чтобы сломанный пакет протух
+				if err := wait(ctx, c.conf.ErrTimeout); err != nil {
+					return err
+				}
 				break
 			}
 			tag.Action(val, c.tags[i])
 			failAttempts = 0 // Сбрасываем счетчик попыток
 			c.Unlock()
 		}
-		time.Sleep(c.conf.PollingTime)
+		if err := wait(ctx, c.conf.PollingTime); err != nil {
+			return err
+		}
 	}
+}
 
-	log.Println("End polling")
-	err := c.modbusClient.Close()
-	if err != nil {
-		log.Println("Controller close error: " + err.Error())
+func (c *Controller) Poll() {
+	if err := c.Run(context.Background()); err != nil {
+		log.Printf("Controller polling stopped: %s", err.Error())
 	}
-
-	os.Exit(2)
 }
