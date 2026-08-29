@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/mcuadros/go-defaults"
@@ -10,6 +12,9 @@ import (
 	"modbus2prometheus/telegram/commands"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 const APP = "modbus2prometheus"
@@ -38,8 +43,7 @@ func initController() (ctrl *controller.Controller, err error) {
 		MaxAttempts: *maxAttempts,
 	})
 	if err != nil {
-		log.Println(err.Error())
-		os.Exit(1)
+		return nil, err
 	}
 
 	for _, tag := range config.Tags {
@@ -51,11 +55,7 @@ func initController() (ctrl *controller.Controller, err error) {
 			Method:      controller.ParseOperation(tag.Operation)})
 	}
 
-	// Запуск полера
-	go ctrl.Poll()
-	defer ctrl.Close()
-
-	return
+	return ctrl, nil
 }
 
 // Инициализация сервера http для выдачи состояния и метрик
@@ -66,6 +66,17 @@ func initHttpServer(ctrl *controller.Controller) *http.ServeMux {
 	mux.Handle("/metrics", MetricsHandler())
 
 	return mux
+}
+
+func newHTTPServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 }
 
 // initTelegram инициализация телеграм бота из конфига
@@ -148,28 +159,88 @@ Usage: %s [options]
 	}
 }
 
-func main() {
+func run() error {
 	ParseFlags()
 	log.Println("Starting...")
 
 	// Инициализация модбас конроллера
 	ctrl, err := initController()
 	if err != nil {
-		log.Println("Can not init modbus device: " + err.Error())
-		os.Exit(1)
+		return fmt.Errorf("init Modbus device: %w", err)
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	controllerErr := make(chan error, 1)
+	go func() {
+		controllerErr <- ctrl.Run(ctx)
+	}()
 
 	// Запуск телеграм бота, управления домом
 	initTelegram(ctrl)
 
 	// Инициализация сервера
 	mux := initHttpServer(ctrl)
+	server := newHTTPServer(*httpListenAddr, mux)
+	serverErr := make(chan error, 1)
 	log.Println("Listening " + *httpListenAddr + " ...")
-	err = http.ListenAndServe(*httpListenAddr, mux)
-	if err != nil {
-		log.Println("Can not listen http: " + err.Error())
-		os.Exit(1)
+	go func() {
+		serverErr <- server.ListenAndServe()
+	}()
+
+	var runErr error
+	controllerStopped := false
+	serverStopped := false
+	select {
+	case <-ctx.Done():
+	case err := <-controllerErr:
+		controllerStopped = true
+		if err != nil && !errors.Is(err, context.Canceled) {
+			runErr = fmt.Errorf("controller stopped: %w", err)
+		}
+	case err := <-serverErr:
+		serverStopped = true
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			runErr = fmt.Errorf("HTTP server stopped: %w", err)
+		}
+	}
+	stop()
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelShutdown()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		runErr = errors.Join(runErr, fmt.Errorf("shutdown HTTP server: %w", err))
 	}
 
-	os.Exit(0)
+	if !controllerStopped {
+		select {
+		case err := <-controllerErr:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				runErr = errors.Join(runErr, fmt.Errorf("controller stopped: %w", err))
+			}
+		case <-shutdownCtx.Done():
+			runErr = errors.Join(runErr, fmt.Errorf("wait for controller shutdown: %w", shutdownCtx.Err()))
+		}
+	}
+
+	if !serverStopped {
+		select {
+		case err := <-serverErr:
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				runErr = errors.Join(runErr, fmt.Errorf("HTTP server stopped: %w", err))
+			}
+		case <-shutdownCtx.Done():
+			runErr = errors.Join(runErr, fmt.Errorf("wait for HTTP server shutdown: %w", shutdownCtx.Err()))
+		}
+	}
+
+	return runErr
+}
+
+func main() {
+	if err := run(); err != nil {
+		log.Println(err.Error())
+		os.Exit(1)
+	}
 }

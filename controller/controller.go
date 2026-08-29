@@ -21,6 +21,11 @@ const (
 	WRITE_FLOAT = 0x8
 )
 
+var (
+	ErrTagNotFound    = errors.New("tag not found")
+	ErrTagNotWritable = errors.New("tag is not writable")
+)
+
 type logger struct {
 	prefix       string
 	customLogger *log.Logger
@@ -73,7 +78,7 @@ func newWithClient(conf Configuration, client registerClient, set *metrics.Set) 
 	}
 }
 
-func (c *Controller) FindTag(name string) *Tag {
+func (c *Controller) findTag(name string) *Tag {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -135,7 +140,7 @@ func (c *Controller) AddTag(tag *Tag) {
 	c.tags = append(c.tags, tag)
 }
 
-func (c *Controller) WriteTag(tag *Tag, value float64) (err error) {
+func (c *Controller) writeTag(tag *Tag, value float64) (err error) {
 	// Пробуем записать
 	if isWriteUint(tag) {
 		err = c.modbusClient.WriteRegister(tag.Address, uint16(value))
@@ -147,15 +152,15 @@ func (c *Controller) WriteTag(tag *Tag, value float64) (err error) {
 }
 
 func (c *Controller) WriteTagByName(name string, value float64) error {
-	tag := c.FindTag(name)
+	tag := c.findTag(name)
 	if tag == nil {
-		return fmt.Errorf("tag %q not found", name)
+		return fmt.Errorf("%w: %q", ErrTagNotFound, name)
 	}
 	if !Writable(tag) {
-		return fmt.Errorf("tag %q is not writable", name)
+		return fmt.Errorf("%w: %q", ErrTagNotWritable, name)
 	}
 
-	return c.WriteTag(tag, value)
+	return c.writeTag(tag, value)
 }
 
 func (c *Controller) Close() error {
@@ -262,11 +267,5 @@ polling:
 		if err := wait(ctx, c.conf.PollingTime); err != nil {
 			return err
 		}
-	}
-}
-
-func (c *Controller) Poll() {
-	if err := c.Run(context.Background()); err != nil {
-		log.Printf("Controller polling stopped: %s", err.Error())
 	}
 }
