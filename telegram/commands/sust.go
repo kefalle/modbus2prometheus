@@ -60,6 +60,10 @@ func parseSetpoint(text string) (float64, error) {
 	return value, nil
 }
 
+func setpointSuccessMessage(value float64) string {
+	return "Значение успешно установлено: " + strconv.FormatFloat(value, 'f', -1, 32)
+}
+
 func (u *UstCommand) Action(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool {
 	if u.currentTagName == "" { // Спрашиваем тип уставки
 		var buttons []tgbotapi.InlineKeyboardButton
@@ -83,7 +87,6 @@ func (u *UstCommand) Action(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool {
 			log.Printf("Telegram send err: %s", err.Error())
 		}
 	} else {
-		text := "Значение устновлено "
 		// Пытаемся изменить значение
 		val, err := parseSetpoint(update.Message.Text)
 		if err != nil {
@@ -94,8 +97,11 @@ func (u *UstCommand) Action(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool {
 			return true
 		}
 
+		var text string
 		if err := u.ctrl.WriteTagByName(u.currentTagName, val); err != nil {
 			text = "Ошибка записи: " + err.Error()
+		} else {
+			text = setpointSuccessMessage(val)
 		}
 
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, text)

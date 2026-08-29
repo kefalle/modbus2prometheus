@@ -25,3 +25,20 @@ func TestParseSetpoint(t *testing.T) {
 		})
 	}
 }
+
+func TestSetpointSuccessMessageIncludesValue(t *testing.T) {
+	tests := []struct {
+		value float64
+		want  string
+	}{
+		{value: 42, want: "Значение успешно установлено: 42"},
+		{value: 42.5, want: "Значение успешно установлено: 42.5"},
+		{value: 0.1, want: "Значение успешно установлено: 0.1"},
+	}
+
+	for _, tt := range tests {
+		if got := setpointSuccessMessage(tt.value); got != tt.want {
+			t.Fatalf("setpointSuccessMessage(%v) = %q, want %q", tt.value, got, tt.want)
+		}
+	}
+}
