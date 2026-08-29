@@ -1,8 +1,8 @@
 # Карта проекта и руководство по рефакторингу
 
-Документ сверён с состоянием проекта после rebase на `origin/main` commit
-`fef5b6b` (2026-08-28). Это исходная точка для рефакторинга, а не описание
-желаемой архитектуры.
+Документ сверён с состоянием ветки после первой итерации безопасного
+рефакторинга (2026-08-29). Разделы о текущем поведении описывают реализованный
+контракт; нерешённые вопросы перечислены отдельно.
 
 ## 1. Назначение
 
@@ -22,7 +22,7 @@
 
 - Go-модуль объявляет версию Go `1.25` в `go.mod`; Docker и GitHub Actions
   используют ту же minor-версию.
-- Анализ выполнен с Go `1.26.2 darwin/arm64`.
+- Проверки выполнены с Go `1.25.4 darwin/arm64`.
 - Modbus: `github.com/simonvetter/modbus v1.6.0`.
 - Метрики: `github.com/VictoriaMetrics/metrics v1.24.0`.
 - Telegram: `github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1`.
@@ -36,9 +36,11 @@ go vet ./...
 go build ./...
 ```
 
-Команды компилируют все четыре пакета. Тестовая команда сообщает
-`[no test files]` для каждого пакета: исполняющих поведение тестов пока нет.
-Форматирование проверяется командой `gofmt -l .`.
+Команды компилируют все четыре пакета. Исполняющие тесты покрывают lifecycle и
+reconnect Controller, snapshot isolation, HTTP write contract, server timeouts
+и Telegram-команды `sens`/`sust`; пакет `telegram` пока не имеет тестов.
+Форматирование проверяется командой `gofmt -l .`, которая не должна выводить
+файлов.
 
 ## 3. Карта файлов
 
@@ -47,11 +49,13 @@ go build ./...
 | `modbus2prometheus.go` | Флаги, сборка зависимостей, запуск Controller, Telegram и HTTP. |
 | `config.go` | YAML-модели, чтение конфигурационного файла. |
 | `handlers.go` | Экспорт глобального реестра VictoriaMetrics. |
+| `controller/client.go` | Минимальный интерфейс Modbus-клиента и production factory. |
 | `controller/controller.go` | Соединение Modbus, цикл опроса, запись регистров, счётчики. |
 | `controller/tags.go` | Модель тега и его последнее значение. |
 | `controller/helpers.go` | Разбор операций, проверки типа и строковое представление значения. |
 | `controller/json.go` | Снимок тегов для `/tags`. |
 | `controller/http.go` | HTTP-обработчики чтения и записи. |
+| `controller/*_test.go` | Fake Modbus client и regression-тесты Controller/HTTP. |
 | `telegram/bot.go` | Long polling Telegram, allowlist владельцев, состояние диалога. |
 | `telegram/commands.go` | Интерфейс команды и простая реализация. |
 | `telegram/commands/sust.go` | Интерактивная запись уставок. |
@@ -81,25 +85,23 @@ main
  │   └─ применить значения по умолчанию и CLI overrides
  ├─ initController
  │   ├─ создать и открыть ModbusClient
- │   ├─ добавить теги и зарегистрировать gauges
- │   └─ запустить Controller.Poll в goroutine
+ │   └─ добавить теги и зарегистрировать gauges
+ ├─ signal.NotifyContext(SIGINT, SIGTERM)
+ ├─ Controller.Run(ctx) в goroutine
  ├─ initTelegram
  │   ├─ создать команды
  │   └─ запустить Telegram long polling в goroutine
- └─ http.ListenAndServe
+ └─ http.Server.ListenAndServe в goroutine
      ├─ /tags
      ├─ /metrics
      └─ /api/v1/write
 ```
 
-Существенная деталь: `initController` выполняет `defer ctrl.Close()` внутри
-самой функции сразу после запуска goroutine. Поэтому `Close` вызывается при
-возврате из `initController`, а не при завершении `main`. Одновременно `Poll`
-без синхронизации записывает `exit = false`. Результат зависит от порядка
-планирования goroutine: опрос либо продолжится, либо завершится с `os.Exit(2)`.
-
-Graceful shutdown отсутствует. Завершение цикла опроса закрывает Modbus и
-непосредственно завершает весь процесс с кодом `2`.
+`main` владеет политикой завершения. Сигнал отменяет context Controller,
+`Run` возвращает причину остановки и закрывает Modbus-клиент. HTTP server имеет
+`ReadHeaderTimeout=5s`, `ReadTimeout=10s`, `WriteTimeout=30s` и
+`IdleTimeout=60s`; graceful shutdown ограничен 10 секундами. Ошибка polling или
+listener также отменяет остальные компоненты и возвращается из `run`.
 
 В Docker Compose конфигурация хоста монтируется в `/app/config.yaml`, а
 приложение и nginx находятся в общей сети `proxy`. Порт приложения `9101` не
@@ -139,7 +141,7 @@ VictoriaMetrics вызывает panic для недопустимого или 
 ### Чтение Modbus
 
 ```text
-Controller.Poll
+Controller.Run(ctx)
  → последовательно обойти tags
  → подождать read-period
  → прочитать holding register
@@ -151,9 +153,9 @@ Controller.Poll
 Значение `float32` занимает два 16-битных регистра; адрес следующего тега
 должен учитывать это согласно карте регистров устройства.
 
-Сам `simonvetter/modbus` сериализует `Open`, `Close`, чтение и запись внутренним
-mutex. При замене библиотеки эта гарантия должна стать явной частью интерфейса
-Controller.
+Controller зависит от минимального интерфейса семи используемых Modbus-методов.
+Production adapter `simonvetter/modbus` сериализует `Open`, `Close`, чтение и
+запись внутренним mutex; тесты подставляют fake client.
 
 ### Prometheus и JSON
 
@@ -170,13 +172,13 @@ Controller.
 HTTP POST /api/v1/write           Telegram /sust
  → найти Tag                       → выбрать Tag группы ust
  → проверить флаг write_*          → разобрать текст как float64
- → привести float64 к типу тега    → Controller.WriteTag
+ → привести float64 к типу тега    → Controller.WriteTagByName
  → записать holding register
 ```
 
-Обе точки входа сходятся в `Controller.WriteTag`. Сейчас этот метод не
-проверяет конечность числа, целочисленность, диапазон типа и допустимый
-доменно-конфигурационный диапазон.
+Обе точки входа сходятся в `Controller.WriteTagByName`. Telegram отклоняет
+ошибку разбора, `NaN` и `Inf` до записи. Controller пока не проверяет дробную
+часть для `uint16`, переполнение и допустимый доменно-конфигурационный диапазон.
 
 ### Внешние датчики
 
@@ -196,6 +198,9 @@ HTTP POST /api/v1/write           Telegram /sust
   }
 ]
 ```
+
+Transport errors, HTTP status вне `2xx` и ошибки JSON возвращаются в callback и
+переводятся в Telegram-сообщение без разыменования пустого response.
 
 ## 7. Фактическая конфигурация
 
@@ -235,10 +240,13 @@ HTTP POST /api/v1/write           Telegram /sust
 | --- | --- |
 | `GET /tags` | JSON-снимок тегов; обработчик фактически принимает любой метод. |
 | `GET /metrics` | Prometheus exposition format и process metrics. |
-| `POST /api/v1/write` | JSON `{"name":"tag","value":42}`; выполняет запись. |
+| `POST /api/v1/write` | Строгий JSON `{"name":"tag","value":42}`; успех `204`. |
 
-Для методов, отличных от POST, `/api/v1/write` сейчас молча возвращает `200`.
-Авторизации, ограничения размера body и серверных timeout нет.
+`/api/v1/write` возвращает JSON error: `400` для некорректного body, `404` для
+неизвестного тега, `403` для read-only тега и `502` для ошибки Modbus. Другие
+методы получают `405` и `Allow: POST`. Body ограничен 1 MiB, неизвестные JSON
+поля запрещены. Авторизации пока нет; endpoint должен оставаться в доверенной
+сети.
 
 ### Telegram
 
@@ -254,64 +262,52 @@ HTTP POST /api/v1/write           Telegram /sust
 цифры и underscore. Код передаёт имена с ведущим `/`, поэтому регистрация меню
 команд Telegram может отклоняться, хотя ручная обработка сообщений остаётся.
 
-## 9. Результаты анализа
+## 9. Состояние после первой итерации
 
-### Критические
+### Исправлено и покрыто regression-тестами
 
-1. **Гонка жизненного цикла Controller.**
-   `modbus2prometheus.go:initController` откладывает `Close` до возврата из
-   `initController`, а `Controller.Poll` конкурентно сбрасывает `exit`. Возможен
-   немедленный `os.Exit(2)` либо игнорирование `Close`.
-2. **Неаутентифицированное управление.**
-   HTTP по умолчанию слушает все интерфейсы, а `/api/v1/write` без авторизации
-   пишет регистры отопления. Это критично за пределами строго изолированной сети.
-3. **Некорректный Telegram-ввод записывает ноль.**
-   В `UstCommand.Action` ошибка `strconv.ParseFloat` меняет текст ответа, но не
-   прерывает выполнение. `WriteTag` вызывается с нулевым `val`, а исходная
-   ошибка затем перезаписывается.
+1. Lifecycle Controller управляется context; polling не вызывает `os.Exit`, а
+   `main` выполняет graceful shutdown HTTP и Modbus.
+2. Reconnect limit считает каждую неуспешную попытку `Open` и возвращает
+   последнюю ошибку после `MaxAttempts`.
+3. Controller использует минимальный Modbus-интерфейс, fake client и отдельный
+   VictoriaMetrics `Set` на экземпляр.
+4. Telegram не записывает текст, `NaN` или `Inf`; Node-RED transport/status/JSON
+   errors обрабатываются без panic, а pressure выводится из правильного поля.
+5. Presentation adapters читают immutable `TagSnapshot`; race-тест одновременно
+   выполняет polling и snapshot reads.
+6. HTTP write имеет явные статусы, JSON error body, лимит 1 MiB, строгие поля и
+   server timeouts.
 
-### Важные
+### Критическое нерешённое
 
-1. `Close`/`Poll`, чтение `LastValue` из Telegram и возврат внутреннего слайса
-   из `Tags()` не образуют согласованной модели синхронизации. `go test -race`
-   не может это проверить без исполняющих сценарий тестов.
-2. В `SensorsCommand.Callback` после ошибки GET используется `resp.Body` без
-   проверки `resp != nil`, что способно вызвать panic. HTTP status также не
-   проверяется.
-3. Детальный ответ датчиков выводит `Humidity` в строке давления вместо
-   `Pressure`.
-4. Состояние Telegram-диалога (`currentCommand`, `currentTag`) общее для всех
-   владельцев и чатов. Два одновременных диалога вмешиваются друг в друга;
-   CallbackQuery отдельно по allowlist не проверяется.
-5. `Controller.WriteTag` преобразует `float64` в `uint16`/`float32` без
-   проверки NaN, Inf, дробной части, переполнения и безопасного диапазона тега.
-6. При постоянной ошибке `modbusClient.Open()` счётчик `failAttempts` не
-   увеличивается, поэтому `MaxAttempts` не ограничивает такие попытки.
-7. `Poll` вызывает `os.Exit(2)`, `telegram.New` вызывает panic при ошибке
-   авторизации, а закрытие канала updates приводит к `log.Fatal`. Внутренние
-   компоненты управляют жизнью всего процесса и плохо тестируются.
-8. Telegram запускается даже при пустом token. Нельзя использовать сервис как
-   exporter без Telegram.
-9. Конфигурация не проверяет неизвестные YAML-поля, пустой URL, повторные теги,
-   конфликтующие операции, положительность duration и корректность metric name.
-   Открытый YAML-файл не закрывается.
-10. У `http.Server` не заданы `ReadHeaderTimeout`, `ReadTimeout`,
-    `WriteTimeout` и graceful shutdown.
-11. Глобальный реестр метрик затрудняет изоляцию тестов и нескольких экземпляров
-    Controller в одном процессе; общие имена `req_counter`/`err_counter` могут
-    конфликтовать.
-12. Docker nginx публикует приложение через `/modbus2prometheus/`, включая
-    неаутентифицированный write endpoint. Ограничение доверенной сетью остаётся
-    обязательным до появления постоянной схемы авторизации.
+1. **Неаутентифицированное управление.** HTTP по умолчанию слушает все
+   интерфейсы, а `/api/v1/write` без авторизации пишет регистры отопления. Docker
+   nginx также публикует этот endpoint. До выбора bearer token, mTLS или защиты
+   reverse proxy сервис должен работать только в доверенной сети.
+2. **Нет безопасных диапазонов уставок.** `WriteTagByName` всё ещё преобразует
+   `float64` в `uint16`/`float32` без проверки дробной части, переполнения и
+   допустимых `min`/`max` конкретного регистра.
 
-### Неблокирующие
+### Важное нерешённое
+
+1. Состояние Telegram-диалога общее для всех владельцев и чатов; CallbackQuery
+   отдельно по allowlist не проверяется.
+2. Telegram запускается даже при пустом token. Ошибка авторизации приводит к
+   panic, а закрытие updates channel — к `log.Fatal`.
+3. Конфигурация не проверяет неизвестные YAML-поля, пустой URL, повторные теги,
+   конфликтующие операции, положительность duration и корректность metric name;
+   открытый YAML-файл не закрывается.
+4. `ParseOperation` завершает процесс для неизвестной операции вместо возврата
+   typed error вызывающему коду.
+
+### Неблокирующее
 
 - Опечатка `TagsHahdler`, непоследовательные `ust`/`sust` и mixed-language
   имена усложняют навигацию.
 - Неиспользуемые `logger`, `curChatId`, фактически неиспользуемая логика
   `SensorsCommand.currentVar` и закомментированные блоки создают шум.
 - `interface{}` в `Tag.LastValue` и `Action` переносит ошибки типов в runtime.
-- HTTP error body объявлен как JSON, но содержит plain text.
 
 ## 10. Что уже сделано удачно
 
@@ -377,20 +373,21 @@ Poller ─────┘          │
 
 ## 13. Этапы рефакторинга
 
-### Этап 0. Защитить текущее управление
+### Этап 0. Защитить текущее управление — частично выполнен
 
-- Исправить lifecycle race и убрать `os.Exit` из Controller.
-- Запретить запись после ошибки разбора Telegram-ввода.
-- Обработать ошибку Node-RED без panic и исправить давление.
-- Ограничить HTTP-запись localhost до выбора постоянной аутентификации.
-- Добавить серверные timeout.
+- Lifecycle race исправлен, `os.Exit` удалён из Controller.
+- Запись после ошибки разбора Telegram-ввода запрещена.
+- Ошибки Node-RED обрабатываются без panic, pressure исправлен.
+- Добавлены строгий HTTP contract, body limit и server timeouts.
+- Ограничение HTTP-записи или постоянная аутентификация ещё не выбраны.
 
-### Этап 1. Создать тестовый шов вокруг Modbus
+### Этап 1. Создать тестовый шов вокруг Modbus — выполнена основа
 
-- Ввести минимальный интерфейс только для используемых методов клиента.
-- Подставлять fake client в тестах.
-- Покрыть чтение `uint16`/`float32`, запись, reconnect и cancel.
-- Использовать отдельный VictoriaMetrics `Set` на экземпляр Controller.
+- Введён минимальный интерфейс только для используемых методов клиента.
+- Fake client используется в lifecycle, snapshot и HTTP tests.
+- Покрыты reconnect, cancel, concurrent snapshot и HTTP write; отдельные
+  сценарии успешного `float32` polling/write ещё можно добавить.
+- Controller использует отдельный VictoriaMetrics `Set`.
 
 Подробный план этого этапа находится в `docs/REFACTORING_PLAN.md`.
 
@@ -409,13 +406,13 @@ Poller ─────┘          │
 - Хранить Telegram conversation state по паре `(chatID, userID)`.
 - Возвращать typed errors, которые adapters переводят в HTTP/Telegram ответы.
 
-### Этап 4. Исправить эксплуатационный контракт
+### Этап 4. Исправить эксплуатационный контракт — частично выполнен
 
-- Поддерживать единый порт `9101` в приложении, vmagent, nginx и systemd.
-- Поддерживать README и Mermaid-карту синхронно с deployment-файлами.
-- Добавить health/readiness endpoints и метрики reconnect/write failures.
-- Усилить существующий CI: format check, `go test -race` и `go vet` в дополнение
-  к build/test; не допускать расхождения версии Go с `go.mod`.
+- Приложение, vmagent target, nginx и systemd согласованы на порту `9101`.
+- README и deployment paths сверены с файлами репозитория.
+- CI запускает format check, `go test -race`, `go vet` и build, а версию Go
+  читает из `go.mod`.
+- Health/readiness endpoints и метрики reconnect/write failures ещё не добавлены.
 
 ## 14. Решения, нужные перед изменением поведения
 
@@ -424,10 +421,7 @@ Poller ─────┘          │
    только на reverse proxy?
 3. Каковы допустимые `min`, `max` и шаг для каждого writable-регистра?
 4. Должны ли несколько Telegram-владельцев вести диалоги одновременно?
-5. Является ли `os.Exit(2)` сигналом для обязательного systemd restart после
-   исчерпания reconnect attempts или сервис должен оставаться доступным для
-   диагностики?
-6. Какие варианты Raspberry Pi поддерживать: ARMv6, ARMv7 и/или ARM64?
+5. Какие варианты Raspberry Pi поддерживать: ARMv6, ARMv7 и/или ARM64?
 
-Рекомендуемый следующий шаг — согласовать пункты 1–3, затем выполнить первый
-план из `docs/REFACTORING_PLAN.md` без массового перемещения пакетов.
+Рекомендуемый следующий шаг — согласовать пункты 1–3, затем отдельно спланировать
+HTTP-auth, domain ranges/config validation и per-chat Telegram state.
