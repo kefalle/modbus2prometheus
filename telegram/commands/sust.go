@@ -1,8 +1,10 @@
 package commands
 
 import (
+	"errors"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log"
+	"math"
 	"modbus2prometheus/controller"
 	"strconv"
 )
@@ -46,6 +48,18 @@ func chunkSlice(slice []tgbotapi.InlineKeyboardButton, chunkSize int) [][]tgbota
 	return chunks
 }
 
+func parseSetpoint(text string) (float64, error) {
+	value, err := strconv.ParseFloat(text, 32)
+	if err != nil {
+		return 0, err
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, errors.New("setpoint must be finite")
+	}
+
+	return value, nil
+}
+
 func (u *UstCommand) Action(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool {
 	if u.currentTag == nil { // Спрашиваем тип уставки
 		var buttons []tgbotapi.InlineKeyboardButton
@@ -71,13 +85,16 @@ func (u *UstCommand) Action(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool {
 	} else {
 		text := "Значение устновлено "
 		// Пытаемся изменить значение
-		val, err := strconv.ParseFloat(update.Message.Text, 32)
+		val, err := parseSetpoint(update.Message.Text)
 		if err != nil {
-			text = "Введено не корректное значение!"
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Введено не корректное значение!")
+			if _, err := bot.Send(msg); err != nil {
+				log.Printf("Telegram send err: %s", err.Error())
+			}
+			return true
 		}
 
-		err = u.ctrl.WriteTag(u.currentTag, val)
-		if err != nil {
+		if err := u.ctrl.WriteTag(u.currentTag, val); err != nil {
 			text = "Ошибка записи: " + err.Error()
 		}
 
