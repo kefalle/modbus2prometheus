@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"github.com/VictoriaMetrics/metrics"
 	"github.com/mcuadros/go-defaults"
 	"github.com/simonvetter/modbus"
 	"log"
-	"os"
 	"sync"
 	"time"
 )
@@ -17,6 +19,11 @@ const (
 	READ_FLOAT  = 0x2
 	WRITE_UINT  = 0x4
 	WRITE_FLOAT = 0x8
+)
+
+var (
+	ErrTagNotFound    = errors.New("tag not found")
+	ErrTagNotWritable = errors.New("tag is not writable")
 )
 
 type logger struct {
@@ -39,9 +46,9 @@ type Controller struct {
 	sync.RWMutex
 	conf         Configuration
 	logger       *logger
-	modbusClient *modbus.ModbusClient
+	modbusClient registerClient
+	metricsSet   *metrics.Set
 	tags         []*Tag
-	exit         bool
 
 	// metrics
 	errCounter *metrics.Counter
@@ -50,36 +57,31 @@ type Controller struct {
 
 func New(conf *Configuration) (c *Controller, err error) {
 	defaults.SetDefaults(conf)
-	c = &Controller{
-		conf: *conf,
-	}
-
-	// Создаем метрики
-	c.reqCounter = metrics.NewCounter("req_counter")
-	c.errCounter = metrics.NewCounter("err_counter")
-
-	// for an RTU over TCP device/bus (remote serial port or
-	// simple TCP-to-serial bridge)
-	c.modbusClient, err = modbus.NewClient(&modbus.ClientConfiguration{
-		URL:     c.conf.Url,
-		Speed:   c.conf.Speed, // serial link speed
-		Timeout: c.conf.Timeout,
-	})
+	client, err := newRegisterClient(*conf)
 	if err != nil {
-		return
+		return nil, err
 	}
 
-	err = c.modbusClient.SetUnitId(c.conf.DeviceId)
-	if err != nil {
-		return
-	}
+	set := metrics.NewSet()
+	metrics.RegisterSet(set)
 
-	err = c.modbusClient.Open()
-
-	return
+	return newWithClient(*conf, client, set), nil
 }
 
-func (c *Controller) FindTag(name string) *Tag {
+func newWithClient(conf Configuration, client registerClient, set *metrics.Set) *Controller {
+	return &Controller{
+		conf:         conf,
+		modbusClient: client,
+		metricsSet:   set,
+		reqCounter:   set.NewCounter("req_counter"),
+		errCounter:   set.NewCounter("err_counter"),
+	}
+}
+
+func (c *Controller) findTag(name string) *Tag {
+	c.RLock()
+	defer c.RUnlock()
+
 	for i, tag := range c.tags {
 		if tag.Name == name {
 			return c.tags[i]
@@ -89,15 +91,30 @@ func (c *Controller) FindTag(name string) *Tag {
 	return nil
 }
 
-func (c *Controller) Tags() []*Tag {
-	return c.tags
+func (c *Controller) Snapshot() []TagSnapshot {
+	c.RLock()
+	defer c.RUnlock()
+
+	snapshot := make([]TagSnapshot, len(c.tags))
+	for i, tag := range c.tags {
+		snapshot[i] = TagSnapshot{
+			Name:        tag.Name,
+			DisplayName: tag.DisplayName,
+			Group:       tag.Group,
+			Address:     tag.Address,
+			Value:       tag.LastValue,
+			Writable:    Writable(tag),
+		}
+	}
+
+	return snapshot
 }
 
 func (c *Controller) AddTag(tag *Tag) {
 	c.Lock()
 	defer c.Unlock()
 
-	tag.Gauge = metrics.NewGauge(tag.Name, func() float64 {
+	tag.Gauge = c.metricsSet.NewGauge(tag.Name, func() float64 {
 		c.RLock()
 		defer c.RUnlock()
 		if tag.LastValue != nil {
@@ -123,7 +140,7 @@ func (c *Controller) AddTag(tag *Tag) {
 	c.tags = append(c.tags, tag)
 }
 
-func (c *Controller) WriteTag(tag *Tag, value float64) (err error) {
+func (c *Controller) writeTag(tag *Tag, value float64) (err error) {
 	// Пробуем записать
 	if isWriteUint(tag) {
 		err = c.modbusClient.WriteRegister(tag.Address, uint16(value))
@@ -134,8 +151,20 @@ func (c *Controller) WriteTag(tag *Tag, value float64) (err error) {
 	return
 }
 
-func (c *Controller) Close() {
-	c.exit = true
+func (c *Controller) WriteTagByName(name string, value float64) error {
+	tag := c.findTag(name)
+	if tag == nil {
+		return fmt.Errorf("%w: %q", ErrTagNotFound, name)
+	}
+	if !Writable(tag) {
+		return fmt.Errorf("%w: %q", ErrTagNotWritable, name)
+	}
+
+	return c.writeTag(tag, value)
+}
+
+func (c *Controller) Close() error {
+	return c.modbusClient.Close()
 }
 
 func (c *Controller) incCounter() {
@@ -146,16 +175,32 @@ func (c *Controller) incErrCounter() {
 	c.errCounter.Inc()
 }
 
-func (c *Controller) Poll() {
+func wait(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (c *Controller) Run(ctx context.Context) (runErr error) {
 	log.Println("Start polling...")
+	defer func() {
+		if err := c.Close(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("close Modbus client: %w", err))
+		}
+	}()
 
 	var failAttempts uint = 0
-	c.exit = false
 	needRestart := false
+polling:
 	for {
-		// Дали команду на выход или количество ошибок превысило ограничение чтобы выйти
-		if c.exit || failAttempts >= c.conf.MaxAttempts {
-			break
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 
 		for i, tag := range c.tags {
@@ -165,13 +210,21 @@ func (c *Controller) Poll() {
 				err := c.modbusClient.Open()
 				if err != nil {
 					log.Println("Can not open connect")
-					break
+					failAttempts++
+					if failAttempts >= c.conf.MaxAttempts {
+						return fmt.Errorf("reconnect failed after %d attempts: %w", failAttempts, err)
+					}
+					if err := wait(ctx, c.conf.ErrTimeout); err != nil {
+						return err
+					}
+					continue polling
 				}
 				needRestart = false
-				failAttempts += 1
 			}
 
-			time.Sleep(c.conf.ReadPeriod)
+			if err := wait(ctx, c.conf.ReadPeriod); err != nil {
+				return err
+			}
 
 			c.Lock()
 			var err error
@@ -198,23 +251,21 @@ func (c *Controller) Poll() {
 				//	}
 				//}
 				needRestart = true
-				c.modbusClient.Close()
+				if closeErr := c.modbusClient.Close(); closeErr != nil {
+					log.Printf("Controller close error: %s", closeErr.Error())
+				}
 				c.Unlock()
-				time.Sleep(c.conf.ErrTimeout) // Добавляем задержку, чтобы сломанный пакет протух
+				if err := wait(ctx, c.conf.ErrTimeout); err != nil {
+					return err
+				}
 				break
 			}
 			tag.Action(val, c.tags[i])
 			failAttempts = 0 // Сбрасываем счетчик попыток
 			c.Unlock()
 		}
-		time.Sleep(c.conf.PollingTime)
+		if err := wait(ctx, c.conf.PollingTime); err != nil {
+			return err
+		}
 	}
-
-	log.Println("End polling")
-	err := c.modbusClient.Close()
-	if err != nil {
-		log.Println("Controller close error: " + err.Error())
-	}
-
-	os.Exit(2)
 }

@@ -1,16 +1,18 @@
 package commands
 
 import (
+	"errors"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log"
+	"math"
 	"modbus2prometheus/controller"
 	"strconv"
 )
 
 type UstCommand struct {
-	ctrl       *controller.Controller
-	curChatId  int64
-	currentTag *controller.Tag
+	ctrl           *controller.Controller
+	curChatId      int64
+	currentTagName string
 }
 
 func (u *UstCommand) Command() string {
@@ -22,7 +24,7 @@ func (u *UstCommand) Description() string {
 }
 
 func (u *UstCommand) Reply() string {
-	u.currentTag = nil
+	u.currentTagName = ""
 	return ""
 }
 
@@ -46,10 +48,26 @@ func chunkSlice(slice []tgbotapi.InlineKeyboardButton, chunkSize int) [][]tgbota
 	return chunks
 }
 
+func parseSetpoint(text string) (float64, error) {
+	value, err := strconv.ParseFloat(text, 32)
+	if err != nil {
+		return 0, err
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, errors.New("setpoint must be finite")
+	}
+
+	return value, nil
+}
+
+func setpointSuccessMessage(value float64) string {
+	return "Значение успешно установлено: " + strconv.FormatFloat(value, 'f', -1, 32)
+}
+
 func (u *UstCommand) Action(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool {
-	if u.currentTag == nil { // Спрашиваем тип уставки
+	if u.currentTagName == "" { // Спрашиваем тип уставки
 		var buttons []tgbotapi.InlineKeyboardButton
-		for _, tag := range u.ctrl.Tags() {
+		for _, tag := range u.ctrl.Snapshot() {
 			if tag.Group == "ust" {
 				buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData(tag.GetName(), tag.Name))
 				//row := tgbotapi.NewInlineKeyboardRow()
@@ -69,16 +87,21 @@ func (u *UstCommand) Action(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool {
 			log.Printf("Telegram send err: %s", err.Error())
 		}
 	} else {
-		text := "Значение устновлено "
 		// Пытаемся изменить значение
-		val, err := strconv.ParseFloat(update.Message.Text, 32)
+		val, err := parseSetpoint(update.Message.Text)
 		if err != nil {
-			text = "Введено не корректное значение!"
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Введено не корректное значение!")
+			if _, err := bot.Send(msg); err != nil {
+				log.Printf("Telegram send err: %s", err.Error())
+			}
+			return true
 		}
 
-		err = u.ctrl.WriteTag(u.currentTag, val)
-		if err != nil {
+		var text string
+		if err := u.ctrl.WriteTagByName(u.currentTagName, val); err != nil {
 			text = "Ошибка записи: " + err.Error()
+		} else {
+			text = setpointSuccessMessage(val)
 		}
 
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, text)
@@ -102,13 +125,22 @@ func (u *UstCommand) Callback(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool
 
 	tagName := update.CallbackQuery.Data
 	text := "Введите значени:"
-	u.currentTag = u.ctrl.FindTag(tagName)
-	if u.currentTag == nil {
+	var selected controller.TagSnapshot
+	found := false
+	for _, tag := range u.ctrl.Snapshot() {
+		if tag.Name == tagName {
+			selected = tag
+			found = true
+			break
+		}
+	}
+	if !found {
 		text = "Выбран не корректный тег " + tagName
-	} else if !controller.Writable(u.currentTag) {
+	} else if !selected.Writable {
 		text = "Тег " + tagName + " не может быть записан, см. конфигурацию"
 	} else {
-		text = "Введите значени для " + u.currentTag.DisplayName + ":"
+		u.currentTagName = selected.Name
+		text = "Введите значени для " + selected.GetName() + ":"
 	}
 
 	// And finally, send a message containing the data received.

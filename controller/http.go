@@ -2,9 +2,13 @@ package controller
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"log"
 	"net/http"
 )
+
+const maxWriteBodyBytes = 1 << 20
 
 type WriteTag struct {
 	Name  string  `json:"name"`
@@ -29,49 +33,51 @@ func TagsHahdler(c *Controller) http.HandlerFunc {
 	return fn
 }
 
+func writeJSONError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+		log.Printf("Cannot send JSON error response: %s", err.Error())
+	}
+}
+
 func (c *Controller) WriteTagsHandler() http.HandlerFunc {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.Method == "POST" {
-			var writeTag WriteTag
-
-			// Парсим тело
-			err := json.NewDecoder(r.Body).Decode(&writeTag)
-			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte("Bad Request"))
-				log.Printf("There was an error decoding the request body into the struct")
-				return
-			}
-
-			// Пробуем найти тег
-			log.Printf("Request to write %s tag with value %f", writeTag.Name, writeTag.Value)
-			tag := c.FindTag(writeTag.Name)
-			if tag == nil {
-				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte("Bad Request: tag not found"))
-				log.Printf("Request has unknown tag name %s", writeTag.Name)
-				return
-			}
-
-			// Пробуем записать
-			if !Writable(tag) {
-				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte("Bad Request: operation not permitted"))
-				log.Printf("Request tag name %s has not permission, see config", writeTag.Name)
-				return
-			}
-
-			err = c.WriteTag(tag, writeTag.Value)
-			if err != nil {
-				log.Printf("Write tag %s error: %s", tag.Name, err.Error())
-				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte("Bad Request: write modbus error"))
-				return
-			}
-
-			w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
 		}
+
+		var writeTag WriteTag
+		r.Body = http.MaxBytesReader(w, r.Body, maxWriteBodyBytes)
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&writeTag); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			writeJSONError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		log.Printf("Request to write %s tag with value %f", writeTag.Name, writeTag.Value)
+		if err := c.WriteTagByName(writeTag.Name, writeTag.Value); err != nil {
+			switch {
+			case errors.Is(err, ErrTagNotFound):
+				writeJSONError(w, http.StatusNotFound, "tag not found")
+			case errors.Is(err, ErrTagNotWritable):
+				writeJSONError(w, http.StatusForbidden, "operation not permitted")
+			default:
+				log.Printf("Write tag %s error: %s", writeTag.Name, err.Error())
+				writeJSONError(w, http.StatusBadGateway, "modbus write failed")
+			}
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 	}
 
 	return fn

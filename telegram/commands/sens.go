@@ -1,7 +1,9 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log"
 	"net/http"
@@ -88,10 +90,6 @@ func float2str(v float64) string {
 func parseData(button string, data []SensorJson) (text string) {
 
 	for _, sensor := range data {
-		if data == nil {
-			continue
-		}
-
 		if button == "temp" {
 			text += sensor.Name + ": " + float2str(sensor.Data.Temperature) + " c\n"
 		} else if button == "humi" {
@@ -102,12 +100,36 @@ func parseData(button string, data []SensorJson) (text string) {
 			text += sensor.Name + "\n"
 			text += "    Т:" + float2str(sensor.Data.Temperature) + " c\n"
 			text += "    H:" + float2str(sensor.Data.Humidity) + " %RH\n"
-			text += "    P:" + float2str(sensor.Data.Humidity) + " mmR\n"
+			text += "    P:" + float2str(sensor.Data.Pressure) + " mmR\n"
 			text += "    B:" + float2str(sensor.Data.Battery) + " %\n"
 		}
 	}
 
 	return text
+}
+
+func (s *SensorsCommand) fetchSensors(ctx context.Context) ([]SensorJson, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.NodeRedUrl, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("Node-RED returned HTTP status %s", resp.Status)
+	}
+
+	var sensors []SensorJson
+	if err := json.NewDecoder(resp.Body).Decode(&sensors); err != nil {
+		return nil, err
+	}
+
+	return sensors, nil
 }
 
 func (s *SensorsCommand) Callback(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool {
@@ -116,21 +138,14 @@ func (s *SensorsCommand) Callback(bot *tgbotapi.BotAPI, update tgbotapi.Update) 
 
 	var text = "Что-то странное произошло..."
 
-	resp, err := s.client.Get(s.NodeRedUrl)
+	sensors, err := s.fetchSensors(context.Background())
 	if err != nil {
 		text = "Ошибка запроса данных: " + err.Error()
-	}
-	defer resp.Body.Close()
-
-	var sensors []SensorJson
-	err = json.NewDecoder(resp.Body).Decode(&sensors)
-	if err != nil {
-		text = "Ошибка обработки данных: " + err.Error()
-	}
-
-	res := parseData(update.CallbackQuery.Data, sensors)
-	if res != "" {
-		text = res
+	} else {
+		res := parseData(update.CallbackQuery.Data, sensors)
+		if res != "" {
+			text = res
+		}
 	}
 
 	msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, text)

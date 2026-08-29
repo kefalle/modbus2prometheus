@@ -8,6 +8,7 @@ scrape_configs:
     labels:
       instance: rpi2
   - job_name: modbus2prometheus
+    # Matches the application, nginx upstream, and systemd default port.
     scrape_interval: 30s
     metrics_path: "/metrics"
     static_configs:

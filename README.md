@@ -108,6 +108,13 @@ URL reachable from the service when the `/sens_th` command is needed.
 | `GET /metrics` | Prometheus metrics. |
 | `POST /api/v1/write` | Write a tag configured with `write_uint` or `write_float`. |
 
+The write endpoint accepts a single JSON object such as
+`{"name":"d_floor_ust","value":5}`. A successful write returns `204`; invalid
+JSON returns `400`, an unknown tag returns `404`, a read-only tag returns `403`,
+and a Modbus write failure returns `502`. Other HTTP methods return `405` with
+`Allow: POST`. Request bodies are limited to 1 MiB and unknown JSON fields are
+rejected.
+
 Under Docker Compose, prefix these paths with `/modbus2prometheus` on nginx
 port 80. The application listens on port 9101 inside the Compose network.
 
@@ -117,15 +124,17 @@ trusted network; the supplied nginx configuration forwards it under
 
 ## Development
 
-Build, test, and lint with the checked-in Makefile:
+Run the same checks used by CI:
 
 ```bash
-make build
-make test
-make lint
+gofmt -l .
+go test -race ./... -count=1
+go vet ./...
+go build ./...
 ```
 
-The binary is written to `build/modbus2prometheus`.
+`gofmt -l .` must produce no output. To build the local binary at
+`build/modbus2prometheus`, run `make build`.
 
 ## Docker Compose
 
@@ -155,3 +164,18 @@ sudo systemctl enable --now modbus2prometheus.service
 
 Metrics are exposed at `/metrics`. The supplied vmagent example is
 [etc/vmagent.scrape.config.yaml](etc/vmagent.scrape.config.yaml).
+It scrapes the application on `127.0.0.1:9101`; the separate `9100` target in
+that file is for node_exporter.
+
+The supplied vmagent unit expects the binary at `/opt/vm/vmagent-prod` and uses
+the following configuration paths:
+
+```bash
+sudo install -Dm644 etc/vmagent.scrape.config.yaml /etc/vmagent.scrape.config.yaml
+sudo install -Dm644 etc/systemd/system/vmagent-scraper.service /etc/systemd/system/vmagent-scraper.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now vmagent-scraper.service
+```
+
+Replace the `<user_id>` and `<token>` placeholders in the installed unit before
+starting it. Do not commit real remote-write credentials.

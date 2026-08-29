@@ -48,16 +48,17 @@ func Writable(t *Tag) bool {
 	return isWriteUint(t) || isWriteFloat(t)
 }
 
-func ValToStr(t *Tag) string {
-	if t.LastValue == nil {
+func ValToStr(t TagSnapshot) string {
+	if t.Value == nil {
 		return "0"
 	}
 
-	if isUint(t) {
-		return strconv.Itoa(int(t.LastValue.(uint16)))
-	} else if isFloat(t) {
-		return strconv.FormatFloat(float64(t.LastValue.(float32)), 'f', 2, 32)
-	} else {
+	switch value := t.Value.(type) {
+	case uint16:
+		return strconv.Itoa(int(value))
+	case float32:
+		return strconv.FormatFloat(float64(value), 'f', 2, 32)
+	default:
 		return "unknown"
 	}
 }
