@@ -23,6 +23,8 @@ type BotState struct {
 	bot             *tgbotapi.BotAPI // Бот
 }
 
+type botFactory func(string) (*tgbotapi.BotAPI, error)
+
 func reply(bot *tgbotapi.BotAPI, update tgbotapi.Update, cmd ICommand) {
 	text := cmd.Reply()
 
@@ -46,21 +48,29 @@ func reply(bot *tgbotapi.BotAPI, update tgbotapi.Update, cmd ICommand) {
 	}
 }
 
-func New(conf BotConfig) {
+func New(conf BotConfig) error {
+	return newWithBotFactory(conf, tgbotapi.NewBotAPI)
+}
+
+func buildBotCommands(api []ICommand) (map[string]ICommand, []tgbotapi.BotCommand) {
 	commandMap := make(map[string]ICommand)
 	var botCommands []tgbotapi.BotCommand
 
-	for _, v := range conf.Api {
+	for _, v := range api {
 		commandMap[v.Command()] = v
 		botCommands = append(botCommands, tgbotapi.BotCommand{
-			Command:     "/" + v.Command(),
+			Command:     v.Command(),
 			Description: v.Description(),
 		})
 	}
+	return commandMap, botCommands
+}
 
-	bot, err := tgbotapi.NewBotAPI(conf.BotToken)
+func newWithBotFactory(conf BotConfig, factory botFactory) error {
+	commandMap, botCommands := buildBotCommands(conf.Api)
+	bot, err := factory(conf.BotToken)
 	if err != nil {
-		log.Panic(err)
+		return fmt.Errorf("initialize Telegram bot: %w", err)
 	}
 	state := BotState{conf, time.Now(), nil, bot}
 	bot.Debug = true
@@ -69,10 +79,8 @@ func New(conf BotConfig) {
 
 	command := tgbotapi.NewSetMyCommands(botCommands...)
 	_, err = bot.Request(command)
-	{
-		if err != nil {
-			log.Printf("Request err: %s", err.Error())
-		}
+	if err != nil {
+		return fmt.Errorf("register Telegram commands: %w", err)
 	}
 
 	u := tgbotapi.NewUpdate(0)
@@ -118,7 +126,13 @@ func New(conf BotConfig) {
 					}
 				}
 			} else if update.CallbackQuery != nil && state.currentCommand != nil { // Пришло нажатие на inline кнопку
-				if !state.currentCommand.Callback(bot, update) {
+				done, err := state.currentCommand.Callback(bot, update)
+				if err != nil {
+					log.Printf("Telegram callback error: %s", err.Error())
+					state.currentCommand = nil
+					continue
+				}
+				if !done {
 					continue
 				}
 				reply(bot, update, state.currentCommand)
@@ -126,6 +140,8 @@ func New(conf BotConfig) {
 			}
 		}
 
-		log.Fatal(fmt.Errorf("no more updates"))
+		log.Printf("Telegram updates channel closed")
 	}()
+
+	return nil
 }

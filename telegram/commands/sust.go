@@ -2,6 +2,7 @@ package commands
 
 import (
 	"errors"
+	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log"
 	"math"
@@ -115,12 +116,12 @@ func (u *UstCommand) Action(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool {
 	return false
 }
 
-func (u *UstCommand) Callback(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool {
+func (u *UstCommand) Callback(bot *tgbotapi.BotAPI, update tgbotapi.Update) (bool, error) {
 	// Respond to the callback query, telling Telegram to show the user
 	// a message with the data received.
 	callback := tgbotapi.NewCallback(update.CallbackQuery.ID, update.CallbackQuery.Data)
 	if _, err := bot.Request(callback); err != nil {
-		panic(err)
+		return true, fmt.Errorf("acknowledge Telegram callback: %w", err)
 	}
 
 	tagName := update.CallbackQuery.Data
@@ -146,10 +147,10 @@ func (u *UstCommand) Callback(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool
 	// And finally, send a message containing the data received.
 	msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, text)
 	if _, err := bot.Send(msg); err != nil {
-		panic(err)
+		return true, fmt.Errorf("send Telegram setpoint prompt: %w", err)
 	}
 
-	return false
+	return false, nil
 }
 
 func NewUstCommand(ctrl *controller.Controller) *UstCommand {

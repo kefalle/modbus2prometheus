@@ -132,7 +132,7 @@ func (s *SensorsCommand) fetchSensors(ctx context.Context) ([]SensorJson, error)
 	return sensors, nil
 }
 
-func (s *SensorsCommand) Callback(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool {
+func (s *SensorsCommand) Callback(bot *tgbotapi.BotAPI, update tgbotapi.Update) (bool, error) {
 	s.Lock()
 	defer s.Unlock()
 
@@ -151,8 +151,8 @@ func (s *SensorsCommand) Callback(bot *tgbotapi.BotAPI, update tgbotapi.Update) 
 	msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, text)
 	// Send the message.
 	if _, err := bot.Send(msg); err != nil {
-		log.Printf("Telegram send err: %s", err.Error())
+		return true, fmt.Errorf("send Telegram sensor response: %w", err)
 	}
 
-	return true
+	return true, nil
 }
