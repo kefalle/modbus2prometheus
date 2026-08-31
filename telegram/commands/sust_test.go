@@ -1,6 +1,18 @@
 package commands
 
-import "testing"
+import (
+	"errors"
+	"net/http"
+	"testing"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+)
+
+type telegramHTTPClientFunc func(*http.Request) (*http.Response, error)
+
+func (f telegramHTTPClientFunc) Do(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestParseSetpoint(t *testing.T) {
 	tests := []struct {
@@ -40,5 +52,29 @@ func TestSetpointSuccessMessageIncludesValue(t *testing.T) {
 		if got := setpointSuccessMessage(tt.value); got != tt.want {
 			t.Fatalf("setpointSuccessMessage(%v) = %q, want %q", tt.value, got, tt.want)
 		}
+	}
+}
+
+func TestUstCallbackReturnsTelegramRequestError(t *testing.T) {
+	want := errors.New("telegram unavailable")
+	bot := &tgbotapi.BotAPI{
+		Token: "test-token",
+		Client: telegramHTTPClientFunc(func(*http.Request) (*http.Response, error) {
+			return nil, want
+		}),
+	}
+	bot.SetAPIEndpoint("https://telegram.invalid/bot%s/%s")
+	cmd := NewUstCommand(nil)
+	update := tgbotapi.Update{CallbackQuery: &tgbotapi.CallbackQuery{
+		ID:   "callback-id",
+		Data: "setpoint",
+		Message: &tgbotapi.Message{
+			Chat: &tgbotapi.Chat{ID: 1},
+		},
+	}}
+
+	_, err := cmd.Callback(bot, update)
+	if !errors.Is(err, want) {
+		t.Fatalf("Callback error = %v, want error wrapping %v", err, want)
 	}
 }

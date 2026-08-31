@@ -9,7 +9,7 @@ type ICommand interface {
 	Description() string
 	Reply() string
 	Action(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool
-	Callback(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool
+	Callback(bot *tgbotapi.BotAPI, update tgbotapi.Update) (bool, error)
 }
 
 // SimpleCommandConf Описание простой команды
@@ -24,7 +24,7 @@ type SimpleCommandConf struct {
 	// Действие, если оно возвращает true, значит можно завершить Reply или ReplyFunc, если false то будем ждать Callback
 	ActionFunc func(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool
 	// Колбек на действие
-	CallbackFunc func(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool
+	CallbackFunc func(bot *tgbotapi.BotAPI, update tgbotapi.Update) (bool, error)
 }
 
 // SimpleCommand Класс для простых команд без дополнительных действий
@@ -62,10 +62,10 @@ func (cmd *SimpleCommand) Action(bot *tgbotapi.BotAPI, update tgbotapi.Update) b
 	return true
 }
 
-func (cmd *SimpleCommand) Callback(bot *tgbotapi.BotAPI, update tgbotapi.Update) bool {
+func (cmd *SimpleCommand) Callback(bot *tgbotapi.BotAPI, update tgbotapi.Update) (bool, error) {
 	if cmd.CallbackFunc != nil {
 		return cmd.CallbackFunc(bot, update)
 	}
 
-	return true
+	return true, nil
 }
