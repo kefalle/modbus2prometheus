@@ -119,7 +119,14 @@ and a Modbus write failure returns `502`. Other HTTP methods return `405` with
 rejected.
 
 Optional Bearer authentication protects only the write endpoint. Enable it in
-the YAML configuration:
+the YAML configuration. Generate a cryptographically secure 256-bit token on
+the host:
+
+```bash
+openssl rand -hex 32
+```
+
+Store the generated value in the configuration:
 
 ```yaml
 http:
@@ -139,7 +146,8 @@ curl -i -X POST \
 A missing or incorrect token returns `401`, JSON `{"error":"unauthorized"}`
 and `WWW-Authenticate: Bearer`. If `http.writeBearerToken` is absent or empty,
 authentication remains disabled for compatibility with existing configuration.
-Do not expose that legacy mode outside a trusted network.
+Do not commit the token to Git, and restrict access to the configuration file.
+Do not expose the legacy unauthenticated mode outside a trusted network.
 
 Under Docker Compose, prefix these paths with `/modbus2prometheus` on nginx
 port 80. Both containers use host networking, the application also listens on
