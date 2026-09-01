@@ -141,3 +141,86 @@ func TestWriteTagsHandlerContract(t *testing.T) {
 		})
 	}
 }
+
+func TestBearerAuth(t *testing.T) {
+	tests := []struct {
+		name          string
+		token         string
+		authorization string
+		wantStatus    int
+		wantCalls     int
+		wantChallenge string
+	}{
+		{
+			name:       "disabled for backward compatibility",
+			wantStatus: http.StatusNoContent,
+			wantCalls:  1,
+		},
+		{
+			name:          "missing authorization",
+			token:         "test-secret",
+			wantStatus:    http.StatusUnauthorized,
+			wantChallenge: "Bearer",
+		},
+		{
+			name:          "wrong bearer token",
+			token:         "test-secret",
+			authorization: "Bearer wrong-secret",
+			wantStatus:    http.StatusUnauthorized,
+			wantChallenge: "Bearer",
+		},
+		{
+			name:          "valid bearer token",
+			token:         "test-secret",
+			authorization: "Bearer test-secret",
+			wantStatus:    http.StatusNoContent,
+			wantCalls:     1,
+		},
+		{
+			name:          "bearer scheme is case insensitive",
+			token:         "test-secret",
+			authorization: "bearer test-secret",
+			wantStatus:    http.StatusNoContent,
+			wantCalls:     1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.WriteHeader(http.StatusNoContent)
+			})
+			handler := BearerAuth(tt.token, next)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/write", nil)
+			if tt.authorization != "" {
+				req.Header.Set("Authorization", tt.authorization)
+			}
+			recorder := httptest.NewRecorder()
+
+			handler.ServeHTTP(recorder, req)
+
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%q", recorder.Code, tt.wantStatus, recorder.Body.String())
+			}
+			if calls != tt.wantCalls {
+				t.Fatalf("next handler calls = %d, want %d", calls, tt.wantCalls)
+			}
+			if got := recorder.Header().Get("WWW-Authenticate"); got != tt.wantChallenge {
+				t.Fatalf("WWW-Authenticate = %q, want %q", got, tt.wantChallenge)
+			}
+			if tt.wantStatus == http.StatusUnauthorized {
+				var response struct {
+					Error string `json:"error"`
+				}
+				if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+					t.Fatalf("decode error response: %v; body=%q", err, recorder.Body.String())
+				}
+				if response.Error != "unauthorized" {
+					t.Fatalf("error = %q, want unauthorized", response.Error)
+				}
+			}
+		})
+	}
+}

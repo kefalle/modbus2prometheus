@@ -21,6 +21,10 @@ type TelegramConfig struct {
 	NodeRedUrl string           `yaml:"nodeRedUrl"`
 }
 
+type HTTPConfig struct {
+	WriteBearerToken string `yaml:"writeBearerToken"`
+}
+
 type Config struct {
 	DeviceUrl   string         `yaml:"device-url"`
 	DeviceId    uint8          `yaml:"device-id" default:"16"`
@@ -30,6 +34,7 @@ type Config struct {
 	ReadPeriod  time.Duration  `yaml:"read-period" default:"10ms"`
 	Tags        []TagConfig    `yaml:"tags"`
 	Telegram    TelegramConfig `yaml:"telegram"`
+	HTTP        HTTPConfig     `yaml:"http"`
 }
 
 func NewConfig(configPath string) (config *Config, err error) {

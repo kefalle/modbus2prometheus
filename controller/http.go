@@ -1,11 +1,14 @@
 package controller
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
 	"log"
 	"net/http"
+	"strings"
 )
 
 const maxWriteBodyBytes = 1 << 20
@@ -39,6 +42,26 @@ func writeJSONError(w http.ResponseWriter, status int, message string) {
 	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
 		log.Printf("Cannot send JSON error response: %s", err.Error())
 	}
+}
+
+func BearerAuth(token string, next http.Handler) http.Handler {
+	if token == "" {
+		return next
+	}
+
+	expectedTokenHash := sha256.Sum256([]byte(token))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scheme, providedToken, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+		providedTokenHash := sha256.Sum256([]byte(providedToken))
+		if !ok || !strings.EqualFold(scheme, "Bearer") ||
+			subtle.ConstantTimeCompare(providedTokenHash[:], expectedTokenHash[:]) != 1 {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (c *Controller) WriteTagsHandler() http.HandlerFunc {

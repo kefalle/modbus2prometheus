@@ -18,7 +18,7 @@ handlers use an owner allowlist.
 
 ```mermaid
 flowchart LR
-    Config["YAML config<br/>device, tags, Telegram"]
+    Config["YAML config<br/>device, tags, HTTP auth, Telegram"]
     Flags["CLI flags"]
     Main["main<br/>composition and lifecycle"]
 
@@ -51,7 +51,7 @@ flowchart LR
     Controller <-->|"read/write holding registers"| Modbus
     Telegram -->|"GET sensor data"| NodeRED
     Prometheus -->|"GET /metrics"| HTTP
-    APIClient -->|"HTTP :80"| Proxy
+    APIClient -->|"Bearer write / HTTP :80"| Proxy
     Proxy -->|"reverse-proxy routes"| HostApps
     Owner <-->|"state, sensors, setpoints"| Telegram
 
@@ -94,6 +94,9 @@ telegram:
   apiToken: "<telegram-bot-token>"
   owners:
     123456789: "owner"
+# Optional: omit this section to keep the legacy unauthenticated write API.
+# http:
+#   writeBearerToken: "<write-token>"
 ```
 
 See [etc/modbus2prometheus.config.yaml](etc/modbus2prometheus.config.yaml) for
@@ -115,11 +118,40 @@ and a Modbus write failure returns `502`. Other HTTP methods return `405` with
 `Allow: POST`. Request bodies are limited to 1 MiB and unknown JSON fields are
 rejected.
 
-Under Docker Compose, prefix these paths with `/modbus2prometheus` on nginx
-port 80. The application listens on port 9101 inside the Compose network.
+Optional Bearer authentication protects only the write endpoint. Enable it in
+the YAML configuration. Generate a cryptographically secure 256-bit token on
+the host:
 
-The write endpoint currently has no authentication. Do not expose it outside a
-trusted network; the supplied nginx configuration forwards it under
+```bash
+openssl rand -hex 32
+```
+
+Store the generated value in the configuration:
+
+```yaml
+http:
+  writeBearerToken: "<write-token>"
+```
+
+Then send the same token in the request:
+
+```bash
+curl -i -X POST \
+  -H 'Authorization: Bearer <write-token>' \
+  -H 'Content-Type: application/json' \
+  --data '{"name":"d_floor_ust","value":5}' \
+  http://127.0.0.1:9101/api/v1/write
+```
+
+A missing or incorrect token returns `401`, JSON `{"error":"unauthorized"}`
+and `WWW-Authenticate: Bearer`. If `http.writeBearerToken` is absent or empty,
+authentication remains disabled for compatibility with existing configuration.
+Do not commit the token to Git, and restrict access to the configuration file.
+Do not expose the legacy unauthenticated mode outside a trusted network.
+
+Under Docker Compose, prefix these paths with `/modbus2prometheus` on nginx
+port 80. Both containers use host networking, the application also listens on
+host port 9101, and the proxied write URL becomes
 `/modbus2prometheus/api/v1/write`.
 
 ## Development
@@ -154,7 +186,7 @@ Build the binary first, then install the files at the paths used by the unit:
 
 ```bash
 sudo install -Dm755 build/modbus2prometheus /opt/modbus2prometheus/modbus2prometheus
-sudo install -Dm644 etc/modbus2prometheus.config.yaml /etc/modbus2prometheus.config.yaml
+sudo install -Dm600 etc/modbus2prometheus.config.yaml /etc/modbus2prometheus.config.yaml
 sudo install -Dm644 etc/systemd/system/modbus2prometheus.service /etc/systemd/system/modbus2prometheus.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now modbus2prometheus.service
