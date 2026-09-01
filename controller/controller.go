@@ -47,6 +47,7 @@ type Controller struct {
 	conf         Configuration
 	logger       *logger
 	modbusClient registerClient
+	clientOpen   bool
 	metricsSet   *metrics.Set
 	tags         []*Tag
 
@@ -72,6 +73,7 @@ func newWithClient(conf Configuration, client registerClient, set *metrics.Set) 
 	return &Controller{
 		conf:         conf,
 		modbusClient: client,
+		clientOpen:   true,
 		metricsSet:   set,
 		reqCounter:   set.NewCounter("req_counter"),
 		errCounter:   set.NewCounter("err_counter"),
@@ -141,6 +143,13 @@ func (c *Controller) AddTag(tag *Tag) {
 }
 
 func (c *Controller) writeTag(tag *Tag, value float64) (err error) {
+	c.Lock()
+	defer c.Unlock()
+
+	if err := c.openClientLocked(); err != nil {
+		return err
+	}
+
 	// Пробуем записать
 	if isWriteUint(tag) {
 		err = c.modbusClient.WriteRegister(tag.Address, uint16(value))
@@ -163,8 +172,30 @@ func (c *Controller) WriteTagByName(name string, value float64) error {
 	return c.writeTag(tag, value)
 }
 
-func (c *Controller) Close() error {
+func (c *Controller) openClientLocked() error {
+	if c.clientOpen {
+		return nil
+	}
+	if err := c.modbusClient.Open(); err != nil {
+		return err
+	}
+	c.clientOpen = true
+	return nil
+}
+
+func (c *Controller) closeClientLocked() error {
+	if !c.clientOpen {
+		return nil
+	}
+	c.clientOpen = false
 	return c.modbusClient.Close()
+}
+
+func (c *Controller) Close() error {
+	c.Lock()
+	defer c.Unlock()
+
+	return c.closeClientLocked()
 }
 
 func (c *Controller) incCounter() {
@@ -207,7 +238,9 @@ polling:
 			// Принудительный рестарт
 			if needRestart {
 				log.Println("Restarting connect...")
-				err := c.modbusClient.Open()
+				c.Lock()
+				err := c.openClientLocked()
+				c.Unlock()
 				if err != nil {
 					log.Println("Can not open connect")
 					failAttempts++
@@ -251,7 +284,7 @@ polling:
 				//	}
 				//}
 				needRestart = true
-				if closeErr := c.modbusClient.Close(); closeErr != nil {
+				if closeErr := c.closeClientLocked(); closeErr != nil {
 					log.Printf("Controller close error: %s", closeErr.Error())
 				}
 				c.Unlock()

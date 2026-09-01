@@ -3,7 +3,9 @@ package controller
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -87,6 +89,72 @@ func TestRunStopsAfterReconnectLimit(t *testing.T) {
 
 	if client.openCalls != 3 {
 		t.Fatalf("Open calls = %d, want 3", client.openCalls)
+	}
+}
+
+func TestWriteReconnectsAfterPollingClosesClient(t *testing.T) {
+	readErr := errors.New("read failed")
+	closed := make(chan struct{})
+	var closeOnce sync.Once
+	var connected atomic.Bool
+	connected.Store(true)
+
+	client := &fakeRegisterClient{
+		readRegisterFn: func(uint16, modbus.RegType) (uint16, error) {
+			return 0, readErr
+		},
+		openFn: func() error {
+			connected.Store(true)
+			return nil
+		},
+		closeFn: func() error {
+			connected.Store(false)
+			closeOnce.Do(func() { close(closed) })
+			return nil
+		},
+		writeRegisterFn: func(uint16, uint16) error {
+			if !connected.Load() {
+				return net.ErrClosed
+			}
+			return nil
+		},
+	}
+	ctrl := newWithClient(Configuration{
+		ErrTimeout:  time.Hour,
+		PollingTime: time.Hour,
+		MaxAttempts: 1,
+	}, client, metrics.NewSet())
+	ctrl.AddTag(&Tag{Name: "temperature", Method: READ_UINT})
+	ctrl.AddTag(&Tag{Name: "setpoint", Method: WRITE_UINT})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- ctrl.Run(ctx)
+	}()
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		cancel()
+		<-done
+		t.Fatal("Run did not close the client after a read error")
+	}
+
+	writeErr := ctrl.WriteTagByName("setpoint", 42)
+	cancel()
+	if runErr := <-done; !errors.Is(runErr, context.Canceled) {
+		t.Fatalf("Run error = %v", runErr)
+	}
+
+	if writeErr != nil {
+		t.Fatalf("WriteTagByName() error = %v, want nil", writeErr)
+	}
+	if client.openCalls != 1 {
+		t.Fatalf("Open calls = %d, want 1", client.openCalls)
+	}
+	if client.writeRegisterCalls != 1 {
+		t.Fatalf("WriteRegister calls = %d, want 1", client.writeRegisterCalls)
 	}
 }
 
