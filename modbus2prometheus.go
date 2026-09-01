@@ -59,10 +59,10 @@ func initController() (ctrl *controller.Controller, err error) {
 }
 
 // Инициализация сервера http для выдачи состояния и метрик
-func initHttpServer(ctrl *controller.Controller) *http.ServeMux {
+func initHttpServer(ctrl *controller.Controller, writeBearerToken string) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/tags", controller.TagsHahdler(ctrl))
-	mux.Handle("/api/v1/write", ctrl.WriteTagsHandler())
+	mux.Handle("/api/v1/write", controller.BearerAuth(writeBearerToken, ctrl.WriteTagsHandler()))
 	mux.Handle("/metrics", MetricsHandler())
 
 	return mux
@@ -181,7 +181,7 @@ func run() error {
 	initTelegram(ctrl)
 
 	// Инициализация сервера
-	mux := initHttpServer(ctrl)
+	mux := initHttpServer(ctrl, config.HTTP.WriteBearerToken)
 	server := newHTTPServer(*httpListenAddr, mux)
 	serverErr := make(chan error, 1)
 	log.Println("Listening " + *httpListenAddr + " ...")
