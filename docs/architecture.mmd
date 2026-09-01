@@ -1,5 +1,5 @@
 flowchart LR
-    Config["YAML config<br/>device, tags, Telegram"]
+    Config["YAML config<br/>device, tags, HTTP auth, Telegram"]
     Flags["CLI flags"]
     Main["main<br/>composition and lifecycle"]
 
@@ -32,7 +32,7 @@ flowchart LR
     Controller <-->|"read/write holding registers"| Modbus
     Telegram -->|"GET sensor data"| NodeRED
     Prometheus -->|"GET /metrics"| HTTP
-    APIClient -->|"HTTP :80"| Proxy
+    APIClient -->|"Bearer write / HTTP :80"| Proxy
     Proxy -->|"reverse-proxy routes"| HostApps
     Owner <-->|"state, sensors, setpoints"| Telegram
 

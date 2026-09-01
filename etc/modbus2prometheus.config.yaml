@@ -83,6 +83,10 @@ tags:
     desc: "Дельта бойлера"
     group: "ust"
 
+# Optional. If absent or empty, /api/v1/write remains unauthenticated.
+# http:
+#   writeBearerToken: "<write-token>"
+
 telegram:
   owners:
     813834143: "Artem"
