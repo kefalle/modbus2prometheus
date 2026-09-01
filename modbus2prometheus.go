@@ -33,6 +33,15 @@ var (
 // Инициализация модбас контроллера
 func initController() (ctrl *controller.Controller, err error) {
 	log.Println("Configuring modbus controller " + *modbusTcpAddr)
+	methods := make([]uint8, len(config.Tags))
+	for i, tag := range config.Tags {
+		method, err := controller.ParseOperation(tag.Operation)
+		if err != nil {
+			return nil, fmt.Errorf("parse operation for tag %q: %w", tag.Name, err)
+		}
+		methods[i] = method
+	}
+
 	ctrl, err = controller.New(&controller.Configuration{
 		Url:         config.DeviceUrl,
 		DeviceId:    config.DeviceId,
@@ -46,13 +55,13 @@ func initController() (ctrl *controller.Controller, err error) {
 		return nil, err
 	}
 
-	for _, tag := range config.Tags {
+	for i, tag := range config.Tags {
 		ctrl.AddTag(&controller.Tag{
 			Name:        tag.Name,
 			DisplayName: tag.Desc,
 			Group:       tag.Group,
 			Address:     tag.Address,
-			Method:      controller.ParseOperation(tag.Operation)})
+			Method:      methods[i]})
 	}
 
 	return ctrl, nil
@@ -80,7 +89,7 @@ func newHTTPServer(address string, handler http.Handler) *http.Server {
 }
 
 // initTelegram инициализация телеграм бота из конфига
-func initTelegram(ctrl *controller.Controller) {
+func initTelegram(ctrl *controller.Controller) error {
 
 	listFn := func(group string) func() string {
 		return func() string {
@@ -118,7 +127,7 @@ func initTelegram(ctrl *controller.Controller) {
 		commands.NewSensorsCommand(config.Telegram.NodeRedUrl + "/current_th"),
 	}
 
-	telegram.New(telegram.BotConfig{
+	return telegram.New(telegram.BotConfig{
 		BotToken: config.Telegram.ApiToken,
 		Owners:   config.Telegram.Owners,
 		Api:      apiCommands,
@@ -126,7 +135,7 @@ func initTelegram(ctrl *controller.Controller) {
 	})
 }
 
-func ParseFlags() {
+func ParseFlags() error {
 	flag.CommandLine.SetOutput(os.Stdout)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `%s %s
@@ -139,14 +148,12 @@ Usage: %s [options]
 
 	err := ValidateConfigPath(*configPath)
 	if err != nil {
-		log.Println("Cannot find configPath: " + err.Error())
-		os.Exit(1)
+		return fmt.Errorf("validate config path: %w", err)
 	}
 
 	config, err = NewConfig(*configPath)
 	if err != nil {
-		log.Println("Cannot parse configPath" + err.Error())
-		os.Exit(1)
+		return fmt.Errorf("parse config: %w", err)
 	}
 
 	defaults.SetDefaults(config)
@@ -157,10 +164,14 @@ Usage: %s [options]
 	if *botApiToken != "" {
 		config.Telegram.ApiToken = *botApiToken
 	}
+
+	return nil
 }
 
 func run() error {
-	ParseFlags()
+	if err := ParseFlags(); err != nil {
+		return err
+	}
 	log.Println("Starting...")
 
 	// Инициализация модбас конроллера
@@ -172,13 +183,15 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Запуск телеграм бота, управления домом
+	if err := initTelegram(ctrl); err != nil {
+		return errors.Join(fmt.Errorf("init Telegram bot: %w", err), ctrl.Close())
+	}
+
 	controllerErr := make(chan error, 1)
 	go func() {
 		controllerErr <- ctrl.Run(ctx)
 	}()
-
-	// Запуск телеграм бота, управления домом
-	initTelegram(ctrl)
 
 	// Инициализация сервера
 	mux := initHttpServer(ctrl, config.HTTP.WriteBearerToken)

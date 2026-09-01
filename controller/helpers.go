@@ -1,8 +1,8 @@
 package controller
 
 import (
+	"fmt"
 	"log"
-	"os"
 	"strconv"
 	"strings"
 )
@@ -63,7 +63,7 @@ func ValToStr(t TagSnapshot) string {
 	}
 }
 
-func ParseOperation(op string) (t uint8) {
+func ParseOperation(op string) (uint8, error) {
 	var res uint8 = 0
 
 	if strings.Contains(op, "read_uint") {
@@ -80,11 +80,8 @@ func ParseOperation(op string) (t uint8) {
 	}
 
 	if res > 0 {
-		return res
+		return res, nil
 	}
 
-	log.Println("Unsupported operation " + op + " must be read_uint, read_float")
-	os.Exit(1)
-
-	return 0
+	return 0, fmt.Errorf("unsupported operation %q: must include read_uint, read_float, write_uint, or write_float", op)
 }
