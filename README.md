@@ -1,38 +1,38 @@
 # modbus2prometheus
 
-Prometheus exporter and controller for Modbus RTU over TCP. The service polls
-holding registers, publishes their latest values through HTTP and Prometheus,
-and writes configured setpoints through HTTP or a Telegram bot whose message
-handlers use an owner allowlist.
+Экспортёр Prometheus и контроллер для Modbus RTU over TCP. Сервис опрашивает
+holding-регистры, публикует последние значения через HTTP и Prometheus и
+записывает настроенные уставки через HTTP или Telegram-бота. Обработчики
+сообщений бота используют список разрешённых владельцев.
 
-## Requirements
+## Требования
 
-- Go 1.25 for local builds.
-- Access to a Modbus device supported by `github.com/simonvetter/modbus`.
-- A Telegram bot token for the current startup path; the bot is not optional
-  yet.
-- Docker with Compose for the container deployment, or systemd for the native
-  deployment.
+- Go 1.25 для локальной сборки.
+- Доступ к Modbus-устройству, поддерживаемому
+  `github.com/simonvetter/modbus`.
+- Токен Telegram-бота для текущего сценария запуска; пока бот не является
+  опциональным.
+- Docker с Compose для контейнерного развёртывания или systemd для нативного.
 
-## Architecture
+## Архитектура
 
 ```mermaid
 flowchart LR
-    Config["YAML config<br/>device, tags, HTTP auth, Telegram"]
-    Flags["CLI flags"]
-    Main["main<br/>composition and lifecycle"]
+    Config["YAML-конфигурация<br/>устройство, теги, HTTP-аутентификация, Telegram"]
+    Flags["Флаги CLI"]
+    Main["main<br/>сборка компонентов и жизненный цикл"]
 
     Config --> Main
     Flags --> Main
 
-    subgraph Compose["Docker Compose deployment"]
-        Proxy["nginx reverse proxy<br/>port 80"]
+    subgraph Compose["Развёртывание Docker Compose"]
+        Proxy["Обратный прокси nginx<br/>порт 80"]
 
-        subgraph Runtime["modbus2prometheus process"]
-            Main --> Controller["Controller<br/>polling, cache, writes"]
-            Main --> HTTP["HTTP server<br/>port 9101"]
-            Main --> Telegram["Telegram bot"]
-            Controller --> Metrics["VictoriaMetrics registry"]
+        subgraph Runtime["Процесс modbus2prometheus"]
+            Main --> Controller["Controller<br/>опрос, кеш, запись"]
+            Main --> HTTP["HTTP-сервер<br/>порт 9101"]
+            Main --> Telegram["Telegram-бот"]
+            Controller --> Metrics["Реестр VictoriaMetrics"]
             HTTP --> Controller
             HTTP --> Metrics
             Telegram --> Controller
@@ -41,19 +41,19 @@ flowchart LR
         Proxy -->|"/modbus2prometheus/"| HTTP
     end
 
-    Modbus["Modbus RTU over TCP device"]
+    Modbus["Устройство Modbus RTU over TCP"]
     NodeRED["Node-RED<br/>/current_th"]
-    HostApps["Host services<br/>Grafana, VictoriaMetrics,<br/>Node-RED, Zigbee2MQTT"]
+    HostApps["Сервисы хоста<br/>Grafana, VictoriaMetrics,<br/>Node-RED, Zigbee2MQTT"]
     Prometheus["Prometheus / vmagent"]
-    Owner["Authorized Telegram owner"]
-    APIClient["HTTP API client"]
+    Owner["Разрешённый владелец Telegram"]
+    APIClient["Клиент HTTP API"]
 
-    Controller <-->|"read/write holding registers"| Modbus
-    Telegram -->|"GET sensor data"| NodeRED
+    Controller <-->|"чтение/запись holding-регистров"| Modbus
+    Telegram -->|"GET данных датчиков"| NodeRED
     Prometheus -->|"GET /metrics"| HTTP
-    APIClient -->|"Bearer write / HTTP :80"| Proxy
-    Proxy -->|"reverse-proxy routes"| HostApps
-    Owner <-->|"state, sensors, setpoints"| Telegram
+    APIClient -->|"Bearer-запись / HTTP :80"| Proxy
+    Proxy -->|"маршруты обратного прокси"| HostApps
+    Owner <-->|"состояние, датчики, уставки"| Telegram
 
     classDef control fill:#ffe0e0,stroke:#b42318,color:#101828
     classDef observe fill:#e0f2fe,stroke:#026aa2,color:#101828
@@ -61,20 +61,20 @@ flowchart LR
     class Metrics,Prometheus,NodeRED,HostApps observe
 ```
 
-Mermaid source: [docs/architecture.mmd](docs/architecture.mmd).
+Исходник Mermaid: [docs/architecture.mmd](docs/architecture.mmd).
 
-Detailed project documentation:
+Подробная документация проекта:
 
-- [Project guide](docs/PROJECT_GUIDE.md)
-- [Safe controller refactoring plan](docs/REFACTORING_PLAN.md)
+- [Руководство по проекту](docs/PROJECT_GUIDE.md)
+- [План рефакторинга](docs/REFACTORING_PLAN.md)
 
-## Configuration
+## Конфигурация
 
-The default configuration path is `./config.yaml`; pass another path with
-`-config`. Modbus URL formats are documented by the
-[Modbus library](https://github.com/simonvetter/modbus/blob/master/README.md).
+Путь к конфигурации по умолчанию — `./config.yaml`; другой путь передаётся
+флагом `-config`. Форматы Modbus URL описаны в документации
+[библиотеки Modbus](https://github.com/simonvetter/modbus/blob/master/README.md).
 
-Minimal RTU-over-TCP configuration:
+Минимальная конфигурация RTU-over-TCP:
 
 ```yaml
 device-url: "rtuovertcp://192.168.1.200:8899"
@@ -94,46 +94,47 @@ telegram:
   apiToken: "<telegram-bot-token>"
   owners:
     123456789: "owner"
-# Optional: omit this section to keep the legacy unauthenticated write API.
+# Опционально: без этой секции сохраняется устаревший API записи без аутентификации.
 # http:
 #   writeBearerToken: "<write-token>"
 ```
 
-See [etc/modbus2prometheus.config.yaml](etc/modbus2prometheus.config.yaml) for
-all tags used by the supplied deployment. Set `telegram.nodeRedUrl` to a base
-URL reachable from the service when the `/sens_th` command is needed.
+Все теги из поставляемого примера развёртывания перечислены в
+[etc/modbus2prometheus.config.yaml](etc/modbus2prometheus.config.yaml). Если
+нужна команда `/sens_th`, задайте в `telegram.nodeRedUrl` базовый URL,
+доступный сервису.
 
-## HTTP endpoints
+## HTTP-интерфейс
 
-| Endpoint | Purpose |
+| Путь | Назначение |
 | --- | --- |
-| `GET /tags` | Latest tag values as JSON. |
-| `GET /metrics` | Prometheus metrics. |
-| `POST /api/v1/write` | Write a tag configured with `write_uint` or `write_float`. |
+| `GET /tags` | Последние значения тегов в JSON. |
+| `GET /metrics` | Метрики Prometheus. |
+| `POST /api/v1/write` | Запись тега с операцией `write_uint` или `write_float`. |
 
-The write endpoint accepts a single JSON object such as
-`{"name":"d_floor_ust","value":5}`. A successful write returns `204`; invalid
-JSON returns `400`, an unknown tag returns `404`, a read-only tag returns `403`,
-and a Modbus write failure returns `502`. Other HTTP methods return `405` with
-`Allow: POST`. Request bodies are limited to 1 MiB and unknown JSON fields are
-rejected.
+Путь записи принимает один JSON-объект, например
+`{"name":"d_floor_ust","value":5}`. Успешная запись возвращает `204`,
+некорректный JSON — `400`, неизвестный тег — `404`, тег только для чтения —
+`403`, ошибка записи Modbus — `502`. Остальные HTTP-методы возвращают `405` с
+`Allow: POST`. Размер тела запроса ограничен 1 MiB; неизвестные поля JSON
+отклоняются.
 
-Optional Bearer authentication protects only the write endpoint. Enable it in
-the YAML configuration. Generate a cryptographically secure 256-bit token on
-the host:
+Опциональная Bearer-аутентификация защищает только путь записи. Она
+включается в YAML-конфигурации. Создайте на хосте криптографически стойкий
+256-битный токен:
 
 ```bash
 openssl rand -hex 32
 ```
 
-Store the generated value in the configuration:
+Сохраните созданное значение в конфигурации:
 
 ```yaml
 http:
   writeBearerToken: "<write-token>"
 ```
 
-Then send the same token in the request:
+Передавайте тот же токен в запросе:
 
 ```bash
 curl -i -X POST \
@@ -143,20 +144,21 @@ curl -i -X POST \
   http://127.0.0.1:9101/api/v1/write
 ```
 
-A missing or incorrect token returns `401`, JSON `{"error":"unauthorized"}`
-and `WWW-Authenticate: Bearer`. If `http.writeBearerToken` is absent or empty,
-authentication remains disabled for compatibility with existing configuration.
-Do not commit the token to Git, and restrict access to the configuration file.
-Do not expose the legacy unauthenticated mode outside a trusted network.
+Отсутствующий или неверный токен приводит к ответу `401`, JSON
+`{"error":"unauthorized"}` и заголовку `WWW-Authenticate: Bearer`. Если
+`http.writeBearerToken` отсутствует или пуст, аутентификация остаётся
+выключенной для совместимости с существующей конфигурацией. Не коммитьте токен
+в Git и ограничьте доступ к файлу конфигурации. Не открывайте устаревший режим
+без аутентификации за пределами доверенной сети.
 
-Under Docker Compose, prefix these paths with `/modbus2prometheus` on nginx
-port 80. Both containers use host networking, the application also listens on
-host port 9101, and the proxied write URL becomes
+При использовании Docker Compose добавляйте к этим путям префикс
+`/modbus2prometheus` на порту nginx `80`. Оба контейнера используют сеть хоста,
+приложение также слушает порт хоста `9101`, а проксированный URL записи имеет вид
 `/modbus2prometheus/api/v1/write`.
 
-## Development
+## Разработка
 
-Run the same checks used by CI:
+Запускайте те же проверки, что и CI:
 
 ```bash
 gofmt -l .
@@ -165,24 +167,25 @@ go vet ./...
 go build ./...
 ```
 
-`gofmt -l .` must produce no output. To build the local binary at
-`build/modbus2prometheus`, run `make build`.
+`gofmt -l .` не должен ничего выводить. Для сборки локального бинарника
+`build/modbus2prometheus` выполните `make build`.
 
 ## Docker Compose
 
-Compose expects the runtime configuration at
-`/etc/modbus2prometheus.config.yaml` on the host:
+Docker Compose ожидает рабочую конфигурацию в
+`/etc/modbus2prometheus.config.yaml` на хосте:
 
 ```bash
 docker compose -f docker/docker-compose.yml up --build -d
 ```
 
-The nginx proxy listens on port 80. Its configuration also forwards routes to
-Grafana, VictoriaMetrics, Node-RED, and Zigbee2MQTT running on the Docker host.
+Прокси nginx слушает порт `80`. Его конфигурация также перенаправляет маршруты
+к Grafana, VictoriaMetrics, Node-RED и Zigbee2MQTT, запущенным на Docker-хосте.
 
-## Install as a systemd service
+## Установка как systemd-сервис
 
-Build the binary first, then install the files at the paths used by the unit:
+Сначала соберите бинарник, затем установите файлы по путям, используемым
+юнитом:
 
 ```bash
 sudo install -Dm755 build/modbus2prometheus /opt/modbus2prometheus/modbus2prometheus
@@ -192,15 +195,15 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now modbus2prometheus.service
 ```
 
-## Scraping metrics
+## Сбор метрик
 
-Metrics are exposed at `/metrics`. The supplied vmagent example is
-[etc/vmagent.scrape.config.yaml](etc/vmagent.scrape.config.yaml).
-It scrapes the application on `127.0.0.1:9101`; the separate `9100` target in
-that file is for node_exporter.
+Метрики доступны по пути `/metrics`. Пример конфигурации vmagent находится в
+[etc/vmagent.scrape.config.yaml](etc/vmagent.scrape.config.yaml). Он собирает
+метрики приложения с `127.0.0.1:9101`; отдельная цель `9100` в этом файле
+предназначена для node_exporter.
 
-The supplied vmagent unit expects the binary at `/opt/vm/vmagent-prod` and uses
-the following configuration paths:
+Поставляемый юнит vmagent ожидает бинарник в `/opt/vm/vmagent-prod` и использует
+следующие пути конфигурации:
 
 ```bash
 sudo install -Dm644 etc/vmagent.scrape.config.yaml /etc/vmagent.scrape.config.yaml
@@ -209,5 +212,5 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now vmagent-scraper.service
 ```
 
-Replace the `<user_id>` and `<token>` placeholders in the installed unit before
-starting it. Do not commit real remote-write credentials.
+Перед запуском замените заполнители `<user_id>` и `<token>` в установленном
+юните. Не коммитьте настоящие учётные данные для `remote_write`.
